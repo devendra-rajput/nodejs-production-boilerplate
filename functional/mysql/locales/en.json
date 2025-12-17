@@ -1,0 +1,60 @@
+{
+    "success": {
+        "userProfile": "User profile",
+        "noRecordsFound": "No record(s) found",
+        "usersData": "Users data",
+        "fileUploaded": "File uploaded successfully",
+        "fileDeleted": "File deleted successfully"
+    },
+    "error": {
+        "userNotFound": "User not found",
+        "serverError": "An unexpected error occurred. Please try again later.",
+        "emailExist": "User already exist with this email",
+        "emailNotExist": "User not exist with this email",
+        "userNotExist": "User not exist with this id",
+        "invalidEmail": "Inalid email",
+        "invalidOtp": "Invalid OTP",
+        "emailAlreadyVerified": "Email already verified",
+        "invalidFileType": "Error: Invalid file type",
+        "fileNotUploaded": "File not uploaded",
+        "tooManyFilesUploaded": "Too many files uploaded",
+        "multerError": "Multer error occurred",
+        "internalServerError": "Internal Server Error",
+        "maxFileLimit": "You can upload a maximum of {{ maxFileCount }} images.",
+        "invalidFileUrlToDelete": "Invalid URL or error deleting file",
+        "fileNotFound": "File not found",
+        "otpNotVerified": "OTP not verified"
+    },
+    "validation": {
+        "strongPassword": "Please choose a strong password",
+        "confirmPasswordNotMatch": "Password and confirm password does not match",
+        "invalidOldPassword": "Invalid old password",
+        "newAndOldPasswordSame": "New and old password can't be same"
+    },
+    "auth": {
+        "loginFailed": "Login failed. Please check your credentials",
+        "tokenExpired": "Your session has expired. Please log in again",
+        "emailCodeSent": "A verification code was sent to your email",
+        "emailCodeSentWithOtp": "A verification code was sent to your email. Verification Code - {{ code }}",
+        "otpVerified": "OTP verified successfully",
+        "invalidCredentails": "Invalid credentials",
+        "loggedIn": "Logged in successfully",
+        "unauthorizedRequest": "Unauthorized request",
+        "tokenMismatch": "Token mismatch, unauthorized request",
+        "unauthorizedRole": "You are not authorized to process this request",
+        "accountBlocked": "Your account has been deleted or blocked by Admin. Please contact {{ supportEmail }} to restore your account",
+        "passwordChanged": "Password changed successfully",
+        "profileUpdated":"Profile updated successfully",
+        "logoutSuccess":"Logout successfully",
+        "deleteAccount":"Account Deleted successfully"
+    },
+    "socket": {
+        "noToken": "Authentication Error: No token provided",
+        "noUserFound": "Authentication Error: User not found",
+        "invalidToken": "Authentication Error: Invalid token",
+        "tokenMismatch": "Authentication Error: Token mismatch, unauthorized request",
+        "serverError": "An unexpected error occurred. Please try again later.",
+        "keySaved": "Key set successfully",
+        "testEvent": "Test event"
+    }
+}

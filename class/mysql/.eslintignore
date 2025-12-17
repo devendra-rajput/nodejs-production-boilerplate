@@ -1,0 +1,19 @@
+.eslintrc.js
+
+# Defaults
+node_modules
+dist
+coverage
+build
+
+# Environment
+.env
+.env.*
+
+# Logs
+logs
+*.log
+
+# Root specific
+mysql_data_persistent
+redis_data

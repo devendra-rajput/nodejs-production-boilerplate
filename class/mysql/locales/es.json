@@ -1,0 +1,60 @@
+{
+    "success": {
+        "userProfile": "Perfil de usuario",
+        "noRecordsFound": "No se encontraron registros",
+        "usersData": "Datos de usuarios",
+        "fileUploaded": "Archivo subido exitosamente",
+        "fileDeleted": "Archivo eliminado exitosamente"
+    },
+    "error": {
+        "userNotFound": "Usuario no encontrado",
+        "serverError": "Ocurrió un error inesperado. Por favor, intente nuevamente más tarde.",
+        "emailExist": "Ya existe un usuario con este correo electrónico",
+        "emailNotExist": "No existe un usuario con este correo electrónico",
+        "userNotExist": "No existe un usuario con este ID",
+        "invalidEmail": "Correo electrónico inválido",
+        "invalidOtp": "OTP inválido",
+        "emailAlreadyVerified": "El correo electrónico ya está verificado",
+        "invalidFileType": "Error: Tipo de archivo inválido",
+        "fileNotUploaded": "Archivo no subido",
+        "tooManyFilesUploaded": "Se subieron demasiados archivos",
+        "multerError": "Ocurrió un error de Multer",
+        "internalServerError": "Error interno del servidor",
+        "maxFileLimit": "Puede subir un máximo de {{ maxFileCount }} imágenes.",
+        "invalidFileUrlToDelete": "URL inválida o error al eliminar el archivo",
+        "fileNotFound": "Archivo no encontrado",
+        "otpNotVerified": "OTP no verificado"
+    },
+    "validation": {
+        "strongPassword": "Por favor, elija una contraseña segura",
+        "confirmPasswordNotMatch": "La contraseña y la confirmación de contraseña no coinciden",
+        "invalidOldPassword": "Contraseña anterior inválida",
+        "newAndOldPasswordSame": "La nueva y la antigua contraseña no pueden ser iguales"
+    },
+    "auth": {
+        "loginFailed": "Inicio de sesión fallido. Por favor, verifique sus credenciales",
+        "tokenExpired": "Su sesión ha expirado. Por favor, inicie sesión nuevamente",
+        "emailCodeSent": "Se envió un código de verificación a su correo electrónico",
+        "emailCodeSentWithOtp": "Se envió un código de verificación a su correo electrónico. Código de verificación - {{ code }}",
+        "otpVerified": "OTP verificado exitosamente",
+        "invalidCredentails": "Credenciales inválidas",
+        "loggedIn": "Sesión iniciada exitosamente",
+        "unauthorizedRequest": "Solicitud no autorizada",
+        "tokenMismatch": "Token no coincide, solicitud no autorizada",
+        "unauthorizedRole": "No está autorizado para procesar esta solicitud",
+        "accountBlocked": "Su cuenta ha sido eliminada o bloqueada por el Administrador. Por favor, contacte a {{ supportEmail }} para restaurar su cuenta",
+        "passwordChanged": "Contraseña cambiada exitosamente",
+        "profileUpdated": "Perfil actualizado exitosamente",
+        "logoutSuccess": "Sesión cerrada exitosamente",
+        "deleteAccount": "Cuenta eliminada exitosamente"
+    },
+    "socket": {
+        "noToken": "Error de autenticación: No se proporcionó token",
+        "noUserFound": "Error de autenticación: Usuario no encontrado",
+        "invalidToken": "Error de autenticación: Token inválido",
+        "tokenMismatch": "Error de autenticación: Token no coincide, solicitud no autorizada",
+        "serverError": "Ocurrió un error inesperado. Por favor, intente nuevamente más tarde.",
+        "keySaved": "Clave establecida exitosamente",
+        "testEvent": "Evento de prueba"
+    }
+}
