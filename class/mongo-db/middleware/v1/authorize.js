@@ -1,74 +1,135 @@
 const jwt = require('jsonwebtoken');
-
-/** Custom Require * */
 const response = require('../../helpers/v1/response.helpers');
 const UserModel = require('../../resources/v1/users/users.model');
 
-class Auth {
-  // Wrap jwt.verify into a Promise for better async/await support
-  verifyToken = (token) => new Promise((resolve, reject) => {
-    jwt.verify(token, process.env.JWT_TOKEN_KEY, (err, decoded) => {
-      if (err) {
-        return reject(err); // Reject with the error if verification fails
-      }
-      resolve(decoded); // Resolve with decoded payload if token is valid
+/**
+ * AuthMiddleware - JWT Authentication and Authorization
+ *
+ * Handles:
+ * - JWT token verification
+ * - User authentication
+ * - Role-based authorization
+ * - User status validation
+ */
+class AuthMiddleware {
+  constructor() {
+    this.response = response;
+    this.userModel = UserModel;
+  }
+
+  /**
+   * Verify JWT token
+   * @private
+   */
+  _verifyToken(token) {
+    return new Promise((resolve, reject) => {
+      jwt.verify(token, process.env.JWT_TOKEN_KEY, (err, decoded) => {
+        if (err) {
+          return reject(err);
+        }
+        resolve(decoded);
+      });
     });
-  });
+  }
 
-  auth = (roleToValidate = null) => async (req, res, next) => {
-    console.log('AuthorizationMiddleware@auth');
-
+  /**
+   * Extract token from request headers
+   * @private
+   */
+  _extractToken(req) {
     let token = req.headers.authorization;
 
     if (!token) {
-      return response.unauthorized('auth.unauthorizedRequest', res, false);
+      return null;
     }
 
     if (token.startsWith('Bearer ')) {
-      // eslint-disable-next-line prefer-destructuring
-      token = token.split(' ')[1];
+      [, token] = token.split(' ');
     }
 
-    try {
-      // Verify the token
-      const decoded = await this.verifyToken(token);
+    return token;
+  }
 
-      // Find user by decoded user_id
-      const user = await UserModel.getOneByColumnNameAndValue('_id', decoded.user_id);
-      if (!user) {
-        return response.unauthorized('error.userNotFound', res, false);
+  /**
+   * Validate user role
+   * @private
+   */
+  _validateRole(user, roleToValidate) {
+    if (!roleToValidate) {
+      return true;
+    }
+
+    const validRoles = [this.userModel.roles.ADMIN, this.userModel.roles.USER];
+
+    if (!validRoles.includes(roleToValidate) || user.role !== roleToValidate) {
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Check if user account is active
+   * @private
+   */
+  _isUserActive(user) {
+    return user.status === this.userModel.statuses.ACTIVE;
+  }
+
+  /**
+   * Authentication middleware
+   * @param {string|null} roleToValidate - Optional role to validate
+   * @returns {Function} Express middleware function
+   */
+  auth(roleToValidate = null) {
+    return async (req, res, next) => {
+      console.log('AuthMiddleware@auth');
+
+      // Extract token
+      const token = this._extractToken(req);
+      if (!token) {
+        return this.response.unauthorized('auth.unauthorizedRequest', res, false);
       }
 
-      // Check if the token matches the stored auth_token for the user
-      if (!user?.tokens?.auth_token || user.tokens.auth_token !== token) {
-        return response.unauthorized('auth.tokenMismatch', res, false);
-      }
+      try {
+        // Verify token
+        const decoded = await this._verifyToken(token);
 
-      // Role validation
-      if (roleToValidate) {
-        if (
-          ![UserModel.roles.ADMIN, UserModel.roles.USER].includes(roleToValidate)
-          || user.role !== roleToValidate
-        ) {
-          return response.badRequest('auth.unauthorizedRole', res, false);
+        // Find user
+        const user = await this.userModel.getOneByColumnNameAndValue('_id', decoded.user_id);
+        if (!user) {
+          return this.response.unauthorized('error.userNotFound', res, false);
         }
+
+        // Check token match
+        if (!user?.tokens?.auth_token || user.tokens.auth_token !== token) {
+          return this.response.unauthorized('auth.tokenMismatch', res, false);
+        }
+
+        // Validate role
+        if (!this._validateRole(user, roleToValidate)) {
+          return this.response.badRequest('auth.unauthorizedRole', res, false);
+        }
+
+        // Check if user is active
+        if (!this._isUserActive(user)) {
+          const errorMessage = res.__('auth.accountBlocked', {
+            supportEmail: process.env.SUPPORT_MAIL,
+          });
+          return this.response.unauthorized(errorMessage, res, false);
+        }
+
+        // Attach user to request
+        req.user = user;
+
+        // Proceed to next middleware
+        next();
+      } catch (error) {
+        console.error('AuthMiddleware@auth Error:', error.message);
+        return this.response.unauthorized(error.message, res, false);
       }
-
-      // Check if the user is active
-      if (user.status !== UserModel.statuses.ACTIVE) {
-        const errorMessage = res.__('auth.accountBlocked', { supportEmail: process.env.SUPPORT_MAIL });
-        return response.unauthorized(errorMessage, res, false);
-      }
-
-      // Attach the user to the request
-      req.user = user;
-
-      // Proceed to next middleware
-      next();
-    } catch (error) {
-      return response.unauthorized(error.message, res, false);
-    }
-  };
+    };
+  }
 }
 
-module.exports = new Auth();
+module.exports = new AuthMiddleware();

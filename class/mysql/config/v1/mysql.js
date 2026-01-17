@@ -18,10 +18,8 @@ const connectDB = async () => {
     await sequelize.authenticate();
     console.log('Connected to mysql');
   } catch (err) {
-    console.log('error connecting to mysql: ', err.message);
-    console.log('Retrying MySQL connection in 5 seconds...');
-    await new Promise((resolve) => { setTimeout(resolve, 5000); });
-    return connectDB();
+    console.error(`MySQL Error: ${err.message}`);
+    process.exit(1);
   }
 };
 

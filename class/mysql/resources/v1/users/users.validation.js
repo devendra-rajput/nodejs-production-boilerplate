@@ -1,245 +1,233 @@
 const Joi = require('joi');
+const { BaseValidation } = require('../../../core');
 
-/** Custom Require * */
+/**
+ * UserValidation - Extends BaseValidation
+ *
+ * Handles user-related validation logic
+ * Demonstrates:
+ * - Inheritance: Extends BaseValidation
+ * - Code Reuse: Uses base validation methods
+ * - Clean Code: Eliminates duplication
+ */
+class UserValidation extends BaseValidation {
+  constructor() {
+    super('UserValidation');
+  }
 
-const response = require('../../../helpers/v1/response.helpers');
-const dataHelper = require('../../../helpers/v1/data.helpers');
-
-class UserValidation {
-  /** Validate the create user data * */
+  /**
+   * Validate create user request
+   */
   createOne = async (req, res, next) => {
-    console.log('UsersValidation@createOne');
-
-    const schema = {
-      first_name: Joi.string().required(),
-      last_name: Joi.string().optional(),
-      email: Joi.string().email().required(),
-      password: Joi.string().required(),
-      confirm_password: Joi.string().required(),
-      phone_number: Joi.number().optional(),
-      phone_code: Joi.string()
-        .when('phone_number', {
+    await this._executeValidation('createOne', req, res, next, async () => {
+      const schema = {
+        first_name: Joi.string().required(),
+        last_name: Joi.string().optional(),
+        email: Joi.string().email().required(),
+        password: Joi.string().required(),
+        confirm_password: Joi.string().required(),
+        phone_number: Joi.number().optional(),
+        phone_code: Joi.string().when('phone_number', {
           is: Joi.exist(),
           then: Joi.required(),
           otherwise: Joi.optional(),
         }),
-    };
+      };
 
-    const errors = await dataHelper.joiValidation(req.body, schema);
-    if (errors?.length) {
-      return response.validationError(errors[0], res, errors);
-    }
+      // Validate schema
+      if (!await this._validateSchema(req.body, schema, res)) return false;
 
-    const passwordCheck = await dataHelper.checkPasswordRegex(req.body.password);
-    if (!passwordCheck) {
-      return response.validationError('validation.strongPassword', res, false);
-    }
+      // Validate password strength
+      if (!await this._validatePasswordStrength(req.body.password, res)) return false;
 
-    if (req.body.password !== req.body.confirm_password) {
-      return response.validationError('validation.confirmPasswordNotMatch', res, false);
-    }
+      // Validate password match
+      if (!this._validatePasswordMatch(
+        req.body.password,
+        req.body.confirm_password,
+        res,
+      )) return false;
 
-    next();
+      return true;
+    });
   };
 
-  /** Validate the resend-otp request * */
+  /**
+   * Validate resend OTP request
+   */
   resendOtp = async (req, res, next) => {
-    console.log('UsersValidation@resendOtp');
+    await this._executeValidation('resendOtp', req, res, next, async () => {
+      const schema = {
+        email: Joi.string().email().required(),
+      };
 
-    const schema = {
-      email: Joi.string().email().required(),
-    };
-
-    const errors = await dataHelper.joiValidation(req.body, schema);
-    if (errors?.length) {
-      return response.validationError(errors[0], res, errors);
-    }
-
-    next();
+      return this._validateSchema(req.body, schema, res);
+    });
   };
 
-  /** Validate the otp verification request * */
+  /**
+   * Validate OTP verification request
+   */
   verifyOtp = async (req, res, next) => {
-    console.log('UsersValidation@verifyOtp');
+    await this._executeValidation('verifyOtp', req, res, next, async () => {
+      const schema = {
+        email: Joi.string().email().required(),
+        otp: Joi.number().integer().strict().required(),
+      };
 
-    const schema = {
-      email: Joi.string().email().required(),
-      otp: Joi.number().integer().required(),
-    };
-
-    const errors = await dataHelper.joiValidation(req.body, schema);
-    if (errors?.length) {
-      return response.validationError(errors[0], res, errors);
-    }
-
-    next();
+      return this._validateSchema(req.body, schema, res);
+    });
   };
 
-  /** Validate the user login data * */
+  /**
+   * Validate user login request
+   */
   userLogin = async (req, res, next) => {
-    console.log('UsersValidation@userLogin');
+    await this._executeValidation('userLogin', req, res, next, async () => {
+      const schema = {
+        email: Joi.string().email().required(),
+        password: Joi.string().required(),
+      };
 
-    const schema = {
-      email: Joi.string().email().required(),
-      password: Joi.string().required(),
-    };
-
-    const errors = await dataHelper.joiValidation(req.body, schema);
-    if (errors?.length) {
-      return response.validationError(errors[0], res, errors);
-    }
-
-    next();
+      return this._validateSchema(req.body, schema, res);
+    });
   };
 
-  /** Validate the change password request * */
+  /**
+   * Validate change password request
+   */
   changePassword = async (req, res, next) => {
-    console.log('UsersValidation@changePassword');
+    await this._executeValidation('changePassword', req, res, next, async () => {
+      const schema = {
+        old_password: Joi.string().required(),
+        new_password: Joi.string().required(),
+        confirm_new_password: Joi.string().required(),
+      };
 
-    const schema = {
-      old_password: Joi.string().required(),
-      new_password: Joi.string().required(),
-      confirm_new_password: Joi.string().required(),
-    };
+      // Validate schema
+      if (!await this._validateSchema(req.body, schema, res)) return false;
 
-    const errors = await dataHelper.joiValidation(req.body, schema);
-    if (errors?.length) {
-      return response.validationError(errors[0], res, errors);
-    }
+      // Validate new password strength
+      if (!await this._validatePasswordStrength(req.body.new_password, res)) return false;
 
-    const passwordCheck = await dataHelper.checkPasswordRegex(req.body.new_password);
-    if (!passwordCheck) {
-      return response.validationError('validation.strongPassword', res, false);
-    }
+      // Validate new password match
+      if (!this._validatePasswordMatch(
+        req.body.new_password,
+        req.body.confirm_new_password,
+        res,
+      )) return false;
 
-    if (req.body.new_password !== req.body.confirm_new_password) {
-      return response.validationError('validation.confirmPasswordNotMatch', res, false);
-    }
+      // Validate new password is different from old
+      if (!this._validatePasswordDifferent(
+        req.body.new_password,
+        req.body.old_password,
+        res,
+      )) return false;
 
-    if (req.body.new_password === req.body.old_password) {
-      return response.validationError('validation.newAndOldPasswordSame', res, false);
-    }
+      // Validate old password
+      if (!await this._validateOldPassword(
+        req.body.old_password,
+        req.user.password,
+        res,
+      )) return false;
 
-    /** Validate the old password */
-    const isOldPasswordValid = await dataHelper.validatePassword(
-      req.body.old_password,
-      req.user.password,
-    );
-    if (!isOldPasswordValid) {
-      return response.badRequest('validation.invalidOldPassword', res, false);
-    }
-
-    next();
+      return true;
+    });
   };
 
-  /** Validate the forgot password request * */
+  /**
+   * Validate forgot password request
+   */
   forgotPassword = async (req, res, next) => {
-    console.log('UsersValidation@forgotPassword');
+    await this._executeValidation('forgotPassword', req, res, next, async () => {
+      const schema = {
+        email: Joi.string().email().required(),
+      };
 
-    const schema = {
-      email: Joi.string().email().required(),
-    };
-
-    const errors = await dataHelper.joiValidation(req.body, schema);
-    if (errors?.length) {
-      return response.validationError(errors[0], res, errors);
-    }
-
-    next();
+      return this._validateSchema(req.body, schema, res);
+    });
   };
 
-  /** Validate the forgot password OTP verification request * */
+  /**
+   * Validate forgot password OTP verification request
+   */
   verifyForgotPasswordOTP = async (req, res, next) => {
-    console.log('UsersValidation@verifyForgotPasswordOTP');
+    await this._executeValidation('verifyForgotPasswordOTP', req, res, next, async () => {
+      const schema = {
+        email: Joi.string().email().required(),
+        otp: Joi.number().integer().strict().required(),
+      };
 
-    const schema = {
-      email: Joi.string().email().required(),
-      otp: Joi.number().integer().required(),
-    };
-
-    const errors = await dataHelper.joiValidation(req.body, schema);
-    if (errors?.length) {
-      return response.validationError(errors[0], res, errors);
-    }
-
-    next();
+      return this._validateSchema(req.body, schema, res);
+    });
   };
 
-  /** Validate the reset password request * */
+  /**
+   * Validate reset password request
+   */
   resetPassword = async (req, res, next) => {
-    console.log('UsersValidation@resetPassword');
+    await this._executeValidation('resetPassword', req, res, next, async () => {
+      const schema = {
+        password: Joi.string().required(),
+        confirm_password: Joi.string().required(),
+        user_id: Joi.string().required(),
+      };
 
-    const schema = {
-      password: Joi.string().required(),
-      confirm_password: Joi.string().required(),
-      user_id: Joi.string().required(),
-    };
+      // Validate schema
+      if (!await this._validateSchema(req.body, schema, res)) return false;
 
-    const errors = await dataHelper.joiValidation(req.body, schema);
-    if (errors?.length) {
-      return response.validationError(errors[0], res, errors);
-    }
+      // Validate password strength
+      if (!await this._validatePasswordStrength(req.body.password, res)) return false;
 
-    const passwordCheck = await dataHelper.checkPasswordRegex(req.body.password);
-    if (!passwordCheck) {
-      return response.validationError('validation.strongPassword', res, false);
-    }
+      // Validate password match
+      if (!this._validatePasswordMatch(
+        req.body.password,
+        req.body.confirm_password,
+        res,
+      )) return false;
 
-    if (req.body.password !== req.body.confirm_password) {
-      return response.validationError('validation.confirmPasswordNotMatch', res, false);
-    }
-
-    next();
+      return true;
+    });
   };
 
-  /** Validate the delete image data * */
+  /**
+   * Validate delete image request
+   */
   deleteImage = async (req, res, next) => {
-    console.log('UsersValidation@deleteImage');
+    await this._executeValidation('deleteImage', req, res, next, async () => {
+      const schema = {
+        image_url: Joi.string().uri().required(),
+      };
 
-    const schema = {
-      image_url: Joi.string().uri().required(),
-    };
-
-    const errors = await dataHelper.joiValidation(req.body, schema);
-    if (errors?.length) {
-      return response.validationError(errors[0], res, errors);
-    }
-
-    next();
+      return this._validateSchema(req.body, schema, res);
+    });
   };
 
-  /** Validate the delete image data * */
+  /**
+   * Validate delete AWS image request
+   */
   deleteImageAWS = async (req, res, next) => {
-    console.log('UsersValidation@deleteImageAWS');
+    await this._executeValidation('deleteImageAWS', req, res, next, async () => {
+      const schema = {
+        image_url: Joi.string().uri().required(),
+      };
 
-    const schema = {
-      image_url: Joi.string().uri().required(),
-    };
-
-    const errors = await dataHelper.joiValidation(req.body, schema);
-    if (errors?.length) {
-      return response.validationError(errors[0], res, errors);
-    }
-
-    next();
+      return this._validateSchema(req.body, schema, res);
+    });
   };
 
-  /** Validate the presigned url generation data * */
+  /**
+   * Validate generate presigned URL request
+   */
   generatePresignedUrl = async (req, res, next) => {
-    console.log('UsersValidation@generatePresignedUrl');
+    await this._executeValidation('generatePresignedUrl', req, res, next, async () => {
+      const schema = {
+        file_name: Joi.string().required(),
+        file_type: Joi.string().required(),
+        folder: Joi.string().optional(),
+      };
 
-    const schema = {
-      file_name: Joi.string().required(),
-      file_type: Joi.string().required(),
-      folder: Joi.string().optional(),
-    };
-
-    const errors = await dataHelper.joiValidation(req.body, schema);
-    if (errors?.length) {
-      return response.validationError(errors[0], res, errors);
-    }
-
-    next();
+      return this._validateSchema(req.body, schema, res);
+    });
   };
 }
 

@@ -1,39 +1,104 @@
 const { RateLimiterRedis } = require('rate-limiter-flexible');
 const { redisClient } = require('../config/v1/redis');
-const logger = require('../utils/logger');
+const { logger } = require('../utils/logger');
 
-let rateLimiter;
-
-const initRateLimiter = () => {
-  rateLimiter = new RateLimiterRedis({
-    storeClient: redisClient,
-    keyPrefix: 'middleware',
-    points: 10, // 10 requests
-    duration: 1, // per 1 second by IP
-  });
-};
-
-const rateLimiterMiddleware = (req, res, next) => {
-  if (!rateLimiter) {
-    initRateLimiter();
+/**
+ * RateLimiterMiddleware - Rate Limiting using Redis
+ *
+ * Protects API from abuse by limiting requests per IP
+ * Follows OOP principles:
+ * - Encapsulation: Rate limiting logic in one class
+ * - Single Responsibility: Only handles rate limiting
+ * - Configurability: Easy to adjust limits
+ */
+class RateLimiterMiddleware {
+  constructor() {
+    this.rateLimiter = null;
+    this.config = {
+      keyPrefix: 'middleware',
+      points: 10, // 10 requests
+      duration: 1, // per 1 second by IP
+    };
   }
 
-  rateLimiter.consume(req.ip)
-    .then((_rateLimiterRes) => {
-      next();
-    })
-    .catch((err) => {
-      logger.warn('Rate limit exceeded', {
-        ip: req.ip,
-        retryAfter: err?.msBeforeNext,
-      });
-
-      console.error('RateLimiter: Rejected or Error', err);
-      res.status(429).send('Too Many Requests');
+  /**
+   * Initialize rate limiter
+   */
+  initialize() {
+    this.rateLimiter = new RateLimiterRedis({
+      storeClient: redisClient,
+      keyPrefix: this.config.keyPrefix,
+      points: this.config.points,
+      duration: this.config.duration,
     });
-};
+
+    console.log('RateLimiterMiddleware: Initialized');
+  }
+
+  /**
+   * Handle rate limit exceeded
+   * @private
+   */
+  _handleRateLimitExceeded(err, req, res) {
+    logger.warn('Rate limit exceeded', {
+      ip: req.ip,
+      retryAfter: err?.msBeforeNext,
+      url: req.originalUrl,
+    });
+
+    console.error('RateLimiter: Request rejected', {
+      ip: req.ip,
+      url: req.originalUrl,
+    });
+
+    res.status(429).json({
+      statusCode: 429,
+      message: 'Too Many Requests',
+      retryAfter: Math.ceil((err?.msBeforeNext || 1000) / 1000),
+    });
+  }
+
+  /**
+   * Rate limiter middleware function
+   */
+  handle(req, res, next) {
+    // Initialize if not already done
+    if (!this.rateLimiter) {
+      this.initialize();
+    }
+
+    this.rateLimiter.consume(req.ip)
+      .then(() => {
+        next();
+      })
+      .catch((err) => {
+        this._handleRateLimitExceeded(err, req, res);
+      });
+  }
+
+  /**
+   * Get middleware function
+   */
+  middleware() {
+    return (req, res, next) => this.handle(req, res, next);
+  }
+
+  /**
+   * Update configuration
+   */
+  setConfig(config) {
+    this.config = { ...this.config, ...config };
+    if (this.rateLimiter) {
+      this.initialize(); // Reinitialize with new config
+    }
+  }
+}
+
+// Export singleton instance
+const rateLimiterInstance = new RateLimiterMiddleware();
 
 module.exports = {
-  rateLimiterMiddleware,
-  initRateLimiter,
+  rateLimiterMiddleware: rateLimiterInstance.middleware(),
+  initRateLimiter: () => rateLimiterInstance.initialize(),
+  setRateLimiterConfig: (config) => rateLimiterInstance.setConfig(config),
 };

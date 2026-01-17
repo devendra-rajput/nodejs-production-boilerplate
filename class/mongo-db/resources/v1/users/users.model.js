@@ -1,4 +1,5 @@
 /** Custom Require * */
+const { BaseModel } = require('../../../core');
 const User = require('./user.schema');
 const dataHelper = require('../../../helpers/v1/data.helpers');
 const redis = require('../../../services/redis');
@@ -88,73 +89,56 @@ const roles = Object.freeze({
  *   description: The users managing API
  */
 
-class UserModel {
+/**
+ * UserModel - Extends BaseModel
+ *
+ * Implements user-specific business logic and data access patterns
+ * Demonstrates:
+ * - Inheritance: Extends BaseModel
+ * - Encapsulation: Uses protected methods from base class
+ * - Polymorphism: Overrides base class methods
+ */
+class UserModel extends BaseModel {
   constructor() {
+    // Call parent constructor with schema, cache service, and model name
+    super(User, redis, 'User');
+
+    // Set user-specific properties
     this.roles = roles;
     this.statuses = statuses;
   }
 
-  createOne = async (data) => {
+  /**
+   * Override createOne to use base class implementation
+   * Demonstrates polymorphism - using parent's method
+   */
+  async createOne(data) {
     console.log('UsersModel@createOne');
+    // Use parent class method which already handles cache invalidation
+    return super.createOne(data);
+  }
 
-    try {
-      if (!data || data === '') {
-        throw new Error('Data is required');
-      }
-
-      // Insert the user data
-      const user = await User.create(data);
-      if (!user) {
-        return false;
-      }
-
-      // Invalidate cache
-      const keys = await redis.getAllSpecificKeys('users:list:');
-      if (keys) {
-        await Promise.all(keys.map((key) => redis.clearKey(key)));
-      }
-
-      return user;
-    } catch (error) {
-      console.log('Error UserModel@createOne: ', error);
-      return false;
-    }
-  };
-
-  getOneByColumnNameAndValue = async (columnName, columnValue) => {
+  /**
+   * Override getOneByColumnNameAndValue to use base class implementation
+   */
+  async getOneByColumnNameAndValue(columnName, columnValue) {
     console.log('UsersModel@getOneByColumnNameAndValue');
+    // Use parent class method
+    return super.getOneByColumnNameAndValue(columnName, columnValue);
+  }
 
-    try {
-      const result = await User.findOne({
-        [columnName]: columnValue,
-        deleted_at: {
-          $in: [null, '', ' '],
-        }, // Check for null, empty string, or space
-      })
-        .collation({ locale: 'en', strength: 2 });
-      if (!result) {
-        return false;
-      }
-
-      return result;
-    } catch (error) {
-      console.log('Error UserModel@getOneByColumnNameAndValue: ', error);
-      return false;
-    }
-  };
-
-  getOneByPhoneCodeAndNumber = async (phoneCode, phoneNumber) => {
+  async getOneByPhoneCodeAndNumber(phoneCode, phoneNumber) {
     console.log('UsersModel@getOneByPhoneCodeAndNumber');
 
     try {
-      const result = await User.findOne({
+      const result = await this.schema.findOne({
         phone_code: phoneCode,
         phone_number: phoneNumber,
         deleted_at: {
           $in: [null, '', ' '],
-        }, // Check for null, empty string, or space
-      })
-        .collation({ locale: 'en', strength: 2 });
+        },
+      }).collation({ locale: 'en', strength: 2 });
+
       if (!result) {
         return false;
       }
@@ -164,66 +148,30 @@ class UserModel {
       console.log('Error UserModel@getOneByPhoneCodeAndNumber: ', error);
       return false;
     }
-  };
+  }
 
-  isUserExist = async (columnName, columnValue, userId = false) => {
+  /**
+   * Check if user exists - uses base class exists method
+   */
+  async isUserExist(columnName, columnValue, userId = false) {
     console.log('UsersModel@isUserExist');
+    // Use parent class exists method
+    return super.exists(columnName, columnValue, userId);
+  }
 
-    try {
-      let query = {
-        [columnName]: columnValue,
-        deleted_at: {
-          $in: [null, '', ' '],
-        }, // Check for null, empty string, or space
-      };
-
-      if (userId) {
-        query = {
-          ...query,
-          _id: {
-            $ne: userId,
-          },
-        };
-      }
-      const usersCount = await User.countDocuments(query).collation({ locale: 'en', strength: 2 });
-      if (!usersCount || usersCount <= 0) {
-        return false;
-      }
-
-      return true;
-    } catch (error) {
-      console.log('Error UserModel@isUserExist: ', error);
-      return false;
-    }
-  };
-
-  updateOne = async (id, data) => {
+  /**
+   * Override updateOne to use base class implementation
+   */
+  async updateOne(id, data) {
     console.log('UsersModel@updateOne');
+    // Use parent class method which already handles cache invalidation
+    return super.updateOne(id, data);
+  }
 
-    try {
-      if ((!id || id === '') || (!data || data === '')) {
-        throw new Error('data is required');
-      }
-
-      const user = await User.findByIdAndUpdate(id, data, { new: true });
-      if (!user) {
-        return false;
-      }
-
-      // Invalidate cache
-      const keys = await redis.getAllSpecificKeys('users:list:');
-      if (keys) {
-        await Promise.all(keys.map((key) => redis.clearKey(key)));
-      }
-
-      return user;
-    } catch (error) {
-      console.log('Error UserModel@updateOne: ', error);
-      return false;
-    }
-  };
-
-  getFormattedData = async (userObj = null) => {
+  /**
+   * Format user data for response - implements abstract method from BaseModel
+   */
+  async getFormattedData(userObj = null) {
     console.log('UsersModel@getFormattedData');
 
     if (!userObj || userObj === '') {
@@ -247,79 +195,66 @@ class UserModel {
     };
 
     return result;
-  };
+  }
 
-  deleteOne = async (id) => {
+  /**
+   * Override deleteOne to use base class implementation
+   */
+  async deleteOne(id) {
     console.log('UsersModel@deleteOne');
+    // Use parent class method which already handles cache invalidation
+    return super.deleteOne(id);
+  }
+
+  /**
+   * Get all users with pagination - implements abstract method from BaseModel
+   * Uses cache service from base class
+   */
+  async getAllWithPagination(page, limit, filterObj = {}) {
+    console.log('UsersModel@getAllWithPagination');
 
     try {
-      const result = await User.deleteOne({ _id: id });
-      if (!result) {
-        return false;
-      }
+      const cacheKey = this._generateCacheKey('list', { page, limit, role: filterObj?.role || 'all' });
 
-      // Invalidate cache
-      const keys = await redis.getAllSpecificKeys('users:list:');
-      if (keys) {
-        await Promise.all(keys.map((key) => redis.clearKey(key)));
-      }
-
-      return result;
-    } catch (error) {
-      console.log('Error UserModel@deleteOne: ', error);
-      return false;
-    }
-  };
-
-  getAllWithPagination = async (page, limit, filterObj = {}) => {
-    console.log('UsersResources@getAllWithPagination');
-
-    try {
-      const cacheKey = `users:list:page:${page}:limit:${limit}:role:${filterObj?.role || 'all'}`;
-      const cachedData = await redis.getKey(cacheKey);
-
-      if (cachedData) {
-        return cachedData;
-      }
-
-      let resObj;
-      let dbQuery = {
-        deleted_at: {
-          $in: [null, '', ' '],
-        }, // Check for null, empty string, or space
-      };
-
-      if (filterObj?.role) {
-        dbQuery = {
-          ...dbQuery,
-          role: filterObj.role,
-        };
-      }
-
-      const totalRecords = await User.countDocuments(dbQuery);
-
-      const pagination = await dataHelper.calculatePagination(totalRecords, page, limit);
-
-      const users = await User.aggregate([
-        { $match: dbQuery },
-        {
-          $project: {
-            password: 0,
-            auth_token: 0,
-            fcm_token: 0,
+      // Use base class cache method
+      return await this._getCachedOrExecute(cacheKey, async () => {
+        let dbQuery = {
+          deleted_at: {
+            $in: [null, '', ' '],
           },
-        },
-      ])
-        .sort({ createdAt: -1 })
-        .skip(pagination.offset)
-        .limit(pagination.limit);
-
-      if (!users) {
-        resObj = {
-          data: [],
         };
-      } else {
-        resObj = {
+
+        if (filterObj?.role) {
+          dbQuery = {
+            ...dbQuery,
+            role: filterObj.role,
+          };
+        }
+
+        const totalRecords = await this.schema.countDocuments(dbQuery);
+        const pagination = await dataHelper.calculatePagination(totalRecords, page, limit);
+
+        const users = await this.schema.aggregate([
+          { $match: dbQuery },
+          {
+            $project: {
+              password: 0,
+              auth_token: 0,
+              fcm_token: 0,
+            },
+          },
+        ])
+          .sort({ createdAt: -1 })
+          .skip(pagination.offset)
+          .limit(pagination.limit);
+
+        if (!users) {
+          return {
+            data: [],
+          };
+        }
+
+        return {
           data: users,
           pagination: {
             total: totalRecords,
@@ -328,17 +263,12 @@ class UserModel {
             per_page: pagination.limit,
           },
         };
-      }
-
-      // Cache the result
-      await redis.setKey(cacheKey, resObj);
-
-      return resObj;
+      });
     } catch (error) {
       console.log('Error UserModel@getAllWithPagination: ', error);
       return false;
     }
-  };
+  }
 }
 
 module.exports = new UserModel();

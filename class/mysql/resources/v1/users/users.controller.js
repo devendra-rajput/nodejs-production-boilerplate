@@ -2,10 +2,11 @@ const path = require('path');
 const fs = require('fs');
 
 /** Custom Require * */
+const { BaseController } = require('../../../core');
 const response = require('../../../helpers/v1/response.helpers');
 const dataHelper = require('../../../helpers/v1/data.helpers');
 const nodemailer = require('../../../services/nodemailer');
-const UserResources = require('./users.resources');
+const UserResource = require('../users/users.resource');
 const aws = require('../../../services/aws');
 const socketService = require('../../../services/socket');
 const socketEvents = require('../../../constants/socket_events');
@@ -13,107 +14,125 @@ const socketEvents = require('../../../constants/socket_events');
 const verificationTemplate = require('../../../emailTemplates/v1/verification');
 const forgotPasswordTemplate = require('../../../emailTemplates/v1/forgotPassword');
 
-class UserController {
+/**
+ * UserController - Extends BaseController
+ *
+ * Implements user-specific business logic and request handling
+ * Demonstrates:
+ * - Inheritance: Extends BaseController
+ * - Dependency Injection: Injects UserResource and response helpers
+ * - Encapsulation: Uses protected methods from base class
+ * - Single Responsibility: Handles only user-related requests
+ */
+class UserController extends BaseController {
+  constructor() {
+    // Call parent constructor with resource, response, and dataHelper
+    super(UserResource, response, dataHelper);
+
+    // Inject additional dependencies (response and dataHelper already in parent)
+    this.nodemailer = nodemailer;
+    this.aws = aws;
+    this.socketService = socketService;
+
+    // Automatically bind all public methods to preserve 'this' context
+    // This is necessary because Express passes methods as callbacks
+    this._autoBindMethods();
+  }
+
+  /**
+   * Create a new user - Uses BaseController helpers
+   * Overrides base create() with custom user registration logic
+   */
   createOne = async (req, res) => {
-    console.log('UsersController@createOne');
+    this._logAction('createOne', { email: req.body.email }); // Use base helper
 
-    /* Collect the user input  */
-    const {
-      first_name,
-      last_name,
-      email,
-      password,
-      phone_number,
-      phone_code,
-    } = req.body;
-
-    /** Check that the user already exist or not with the provided email */
-    const isUserExist = await UserResources.isUserExist('email', email);
-    if (isUserExist) {
-      return response.conflict('error.emailExist', res, false);
-    }
-
-    /* Convert password string into a hash  */
-    const hashedPassword = await dataHelper.hashPassword(password);
-
-    /* Generate OTP to verify the user email  */
-    const emailVerificationOtp = await dataHelper.generateSecureOTP(6);
-
-    /* Formated the data to insert in DB */
-    let userData = {
-      email,
-      password: hashedPassword,
-      first_name,
-      last_name,
-      email_verification_otp: emailVerificationOtp,
-    };
-
-    if (phone_code && phone_number) {
-      userData = {
-        ...userData,
-        phone_code,
+    try {
+      const {
+        first_name,
+        last_name,
+        email,
+        password,
         phone_number,
-      };
-    }
+        phone_code,
+      } = req.body;
 
-    if (req?.file?.path) {
-      /** Convert file path into a public URL */
-      const filePath = req.file.path.replace(/\\/g, '/');
-      const fileUrl = `${req.protocol}://${req.get('host')}/${filePath}`;
-      userData = {
-        ...userData,
-        profile_picture: fileUrl,
-      };
-    }
-
-    /* Insert the data into DB */
-    const hasCreated = await UserResources.createOne(userData);
-    if (!hasCreated) {
-      /** If unable to create user then delete the uploaded file */
-      if (userData?.profile_picture) {
-        // e.g., /uploads/images/filename.jpg
-        const filePath = new URL(userData.profile_picture).pathname;
-        // adjust path as needed. process.cwd() returns root directory
-        const localPath = path.join(process.cwd(), filePath);
-
-        // eslint-disable-next-line security/detect-non-literal-fs-filename
-        if (fs.existsSync(localPath)) {
-          // eslint-disable-next-line security/detect-non-literal-fs-filename
-          fs.unlinkSync(localPath);
-        }
+      // Check if user exists
+      const isUserExist = await this.resource.isUserExist('email', email);
+      if (isUserExist) {
+        return this.response.conflict('error.emailExist', res, false);
       }
 
-      return response.exception('error.serverError', res, false);
-    }
+      // Hash password
+      const hashedPassword = await this.dataHelper.hashPassword(password);
 
-    /** Send verification email */
-    try {
-      const subject = 'Account Verification';
-      const html = await verificationTemplate(emailVerificationOtp);
-      nodemailer.sendMail(email, subject, html);
+      // Generate OTP
+      const emailVerificationOtp = await this.dataHelper.generateSecureOTP(6);
+
+      // Prepare user data
+      let userData = {
+        email,
+        password: hashedPassword,
+        first_name,
+        last_name,
+        email_verification_otp: emailVerificationOtp,
+      };
+
+      if (phone_code && phone_number) {
+        userData = { ...userData, phone_code, phone_number };
+      }
+
+      if (req?.file?.path) {
+        const filePath = req.file.path.replace(/\\/g, '/');
+        const fileUrl = `${req.protocol}://${req.get('host')}/${filePath}`;
+        userData = { ...userData, profile_picture: fileUrl };
+      }
+
+      // Create user
+      const hasCreated = await this.resource.createOne(userData);
+      if (!hasCreated) {
+        // Cleanup uploaded file if user creation failed
+        if (userData?.profile_picture) {
+          const filePath = new URL(userData.profile_picture).pathname;
+          const localPath = path.join(process.cwd(), filePath);
+          // eslint-disable-next-line security/detect-non-literal-fs-filename
+          if (fs.existsSync(localPath)) {
+            // eslint-disable-next-line security/detect-non-literal-fs-filename
+            fs.unlinkSync(localPath);
+          }
+        }
+        return this.response.exception('error.serverError', res, false);
+      }
+
+      // Send verification email
+      try {
+        const subject = 'Account Verification';
+        const html = await verificationTemplate(emailVerificationOtp);
+        this.nodemailer.sendMail(email, subject, html);
+      } catch (error) {
+        console.log('Error while sending verification email: ', error);
+      }
+
+      // Use environment-specific message
+      let successMessage;
+      if (process.env.NODE_ENV === 'development') {
+        successMessage = res.__('auth.emailCodeSentWithOtp', { code: emailVerificationOtp });
+      } else {
+        successMessage = res.__('auth.emailCodeSent');
+      }
+
+      return this.response.created(successMessage, res, true);
     } catch (error) {
-      console.log('Error while sending verification email: ', error);
+      return this._handleError(error, res, this.response); // Use base helper
     }
-
-    let successMessage;
-    if (process.env.NODE_ENV === 'development') {
-      // Development: include the verification code in the message
-      successMessage = res.__('auth.emailCodeSentWithOtp', { code: emailVerificationOtp });
-    } else {
-      // Production: standard message without exposing the code
-      successMessage = res.__('auth.emailCodeSent');
-    }
-
-    return response.created(successMessage, res, true);
-  };
+  }
 
   resendOtp = async (req, res) => {
-    console.log('UsersController@resendOtp');
+    this._logAction('resendOtp');
 
     const { email } = req.body;
 
     /** Find the user br given email */
-    const user = await UserResources.getOneByColumnNameAndValue('email', email);
+    const user = await this.resource.getOneByColumnNameAndValue('email', email);
     if (!user) {
       return response.badRequest('error.invalidEmail', res, false);
     }
@@ -123,12 +142,12 @@ class UserController {
     }
 
     /* Generate OTP to verify the user email  */
-    const emailVerificationOtp = await dataHelper.generateSecureOTP(6);
+    const emailVerificationOtp = await this.dataHelper.generateSecureOTP(6);
 
     const userDataToUpdate = {
       email_verification_otp: emailVerificationOtp,
     };
-    const hasUpdated = await UserResources.updateOne(user.id, userDataToUpdate);
+    const hasUpdated = await this.resource.updateOne(user.id, userDataToUpdate);
     if (!hasUpdated) {
       return response.exception('error.serverError', res, null);
     }
@@ -155,12 +174,12 @@ class UserController {
   };
 
   verifyOtp = async (req, res) => {
-    console.log('UsersController@verifyOtp');
+    this._logAction('verifyOtp');
 
     const { email, otp } = req.body;
 
     /** Find the user br given email */
-    const user = await UserResources.getOneByColumnNameAndValue('email', email);
+    const user = await this.resource.getOneByColumnNameAndValue('email', email);
     if (!user) {
       return response.badRequest('error.invalidEmail', res, false);
     }
@@ -174,20 +193,22 @@ class UserController {
       user_id: user.id,
       role: user.role,
     };
-    const token = await dataHelper.generateJWTToken(tokenData);
+    const token = await this.dataHelper.generateJWTToken(tokenData);
 
     const userDataToUpdate = {
-      auth_token: token,
-      fcm_token: req.headers['fcm-token'],
+      tokens: {
+        auth_token: token,
+        fcm_token: req.headers['fcm-token'],
+      },
       email_verification_otp: null,
       is_email_verified: true,
     };
-    const updatedUser = await UserResources.updateOne(user.id, userDataToUpdate);
-    if (!updatedUser) {
+    const hasUpdated = await this.resource.updateOne(user.id, userDataToUpdate);
+    if (!hasUpdated) {
       return response.exception('error.serverError', res, null);
     }
 
-    const formatedUserData = await UserResources.getFormattedData(updatedUser);
+    const formatedUserData = await this.resource.getFormattedData(user);
 
     const result = {
       token,
@@ -198,18 +219,18 @@ class UserController {
   };
 
   userLogin = async (req, res) => {
-    console.log('UsersController@userlogin');
+    this._logAction('userLogin');
 
     const { email, password } = req.body;
 
     /** Find the user br given email */
-    const user = await UserResources.getOneByColumnNameAndValue('email', email);
+    const user = await this.resource.getOneByColumnNameAndValue('email', email);
     if (!user) {
       return response.badRequest('auth.invalidCredentails', res, false);
     }
 
     /** Validate the password */
-    const isValidPassword = await dataHelper.validatePassword(password, user.password);
+    const isValidPassword = await this.dataHelper.validatePassword(password, user.password);
     if (!isValidPassword) {
       return response.badRequest('auth.invalidCredentails', res, false);
     }
@@ -219,18 +240,18 @@ class UserController {
       user_id: user.id,
       role: user.role,
     };
-    const token = await dataHelper.generateJWTToken(tokenData);
+    const token = await this.dataHelper.generateJWTToken(tokenData);
 
     const userData = {
       auth_token: token,
-      fcm_token: req.headers['fcm-token'],
+      fcm_token: req.headers['fcm-token']
     };
-    const updatedUser = await UserResources.updateOne(user.id, userData);
-    if (!updatedUser) {
+    const hasUpdated = await this.resource.updateOne(user.id, userData);
+    if (!hasUpdated) {
       return response.exception('error.serverError', res, null);
     }
 
-    const formatedUserData = await UserResources.getFormattedData(updatedUser);
+    const formatedUserData = await this.resource.getFormattedData(user);
 
     const result = {
       token,
@@ -240,17 +261,19 @@ class UserController {
   };
 
   changePassword = async (req, res) => {
+    this._logAction('changePassword');
+
     const { new_password } = req.body;
     const { user } = req;
 
     /* Convert password string into a hash  */
-    const hashedPassword = await dataHelper.hashPassword(new_password);
+    const hashedPassword = await this.dataHelper.hashPassword(new_password);
 
     /** Update new password in DB */
     const userDataToUpdate = {
       password: hashedPassword,
     };
-    const hasUpdated = await UserResources.updateOne(user.id, userDataToUpdate);
+    const hasUpdated = await this.resource.updateOne(user.id, userDataToUpdate);
     if (!hasUpdated) {
       return response.exception('error.serverError', res, null);
     }
@@ -259,23 +282,23 @@ class UserController {
   };
 
   forgotPassword = async (req, res) => {
-    console.log('UsersController@forgotPassword');
+    this._logAction('forgotPassword');
 
     const { email } = req.body;
 
     /** Find the user br given email */
-    const user = await UserResources.getOneByColumnNameAndValue('email', email);
+    const user = await this.resource.getOneByColumnNameAndValue('email', email);
     if (!user) {
       return response.badRequest('error.invalidEmail', res, false);
     }
 
     /* Generate OTP to verify the user email  */
-    const forgotPasswordVerificationOtp = await dataHelper.generateSecureOTP(6);
+    const forgotPasswordVerificationOtp = await this.dataHelper.generateSecureOTP(6);
 
     const userDataToUpdate = {
-      forgot_password_otp: forgotPasswordVerificationOtp,
+      forgot_password_otp: forgotPasswordVerificationOtp
     };
-    const hasUpdated = await UserResources.updateOne(user.id, userDataToUpdate);
+    const hasUpdated = await this.resource.updateOne(user.id, userDataToUpdate);
     if (!hasUpdated) {
       return response.exception('error.serverError', res, null);
     }
@@ -304,12 +327,12 @@ class UserController {
   };
 
   verifyForgotPasswordOTP = async (req, res) => {
-    console.log('UsersController@verifyForgotPasswordOTP');
+    this._logAction('verifyForgotPasswordOTP');
 
     const { email, otp } = req.body;
 
     /** Find the user br given email */
-    const user = await UserResources.getOneByColumnNameAndValue('email', email);
+    const user = await this.resource.getOneByColumnNameAndValue('email', email);
     if (!user) {
       return response.badRequest('error.invalidEmail', res, false);
     }
@@ -321,10 +344,10 @@ class UserController {
     const userDataToUpdate = {
       email_verification_otp: null,
       forgot_password_otp: null,
-      is_email_verified: true,
+      is_email_verified: true
     };
 
-    const hasUpdated = await UserResources.updateOne(user.id, userDataToUpdate);
+    const hasUpdated = await this.resource.updateOne(user.id, userDataToUpdate);
     if (!hasUpdated) {
       return response.exception('error.serverError', res, null);
     }
@@ -339,28 +362,28 @@ class UserController {
   };
 
   resetPassword = async (req, res) => {
-    console.log('UsersController@resetPassword');
+    this._logAction('resetPassword');
 
     const { password, user_id } = req.body;
 
-    const user = await UserResources.getOneByColumnNameAndValue('id', user_id);
+    const user = await this.resource.getOneByColumnNameAndValue('id', user_id);
     if (!user) {
       return response.badRequest('error.userNotExist', res, false);
     }
 
-    if (user?.otp?.forgot_password) {
+    if (user?.forgot_password_otp) {
       return response.badRequest('error.otpNotVerified', res, false);
     }
 
     /* Convert password string into a hash  */
-    const hashedPassword = await dataHelper.hashPassword(password);
+    const hashedPassword = await this.dataHelper.hashPassword(password);
 
     /** Update new password in DB */
     const userDataToUpdate = {
       password: hashedPassword,
     };
 
-    const hasUpdated = await UserResources.updateOne(user.id, userDataToUpdate);
+    const hasUpdated = await this.resource.updateOne(user.id, userDataToUpdate);
     if (!hasUpdated) {
       return response.exception('error.serverError', res, null);
     }
@@ -368,58 +391,85 @@ class UserController {
     return response.success('auth.passwordChanged', res, true);
   };
 
+  /**
+   * Get user profile - Uses BaseController helpers
+   */
   getUserProfile = async (req, res) => {
-    console.log('UsersController@getUserProfile');
+    this._logAction('getUserProfile'); // Use base helper
 
-    const { user } = req;
+    try {
+      const { user } = req;
 
-    socketService.emitToUsers([user.id], socketEvents.EMIT.USER_PROFILE_VIEWED, {
-      message: 'Profile viewed',
-      time: new Date(),
-    });
+      // Emit socket event
+      this.socketService.emitToUsers([user.id], socketEvents.EMIT.USER_PROFILE_VIEWED, {
+        message: 'Profile viewed',
+        time: new Date(),
+      });
 
-    const formatedUserData = await UserResources.getFormattedData(user);
+      const formattedUserData = await this.resource.getFormattedData(user);
+      return this.response.success('success.userProfile', res, formattedUserData);
+    } catch (error) {
+      return this._handleError(error, res, this.response); // Use base helper
+    }
+  }
 
-    return response.success('success.userProfile', res, formatedUserData);
-  };
-
+  /**
+   * Get all users with pagination - Uses BaseController helpers
+   * Could also use: return await super.getAll(req, res);
+   * But this shows custom filtering
+   */
   getAllWithPagination = async (req, res) => {
-    console.log('UsersController@getAllWithPagination');
+    this._logAction('getAllWithPagination'); // Use base helper
 
-    /** Extract the page and limt from query param */
-    const { page, limit } = await dataHelper.getPageAndLimit(req.query);
+    try {
+      // Extract pagination params using base helper
+      const { page, limit } = await this._getPaginationParams(req.query, this.dataHelper);
 
-    const filterObj = {
-      role: UserResources.roles.USER,
-    };
-    const result = await UserResources.getAllWithPagination(page, limit, filterObj);
-    if (!result?.data?.length) {
-      return response.success('success.noRecordsFound', res, result);
+      // Custom filter for users only (not admins)
+      const filterObj = {
+        role: this.resource.roles.USER,
+      };
+
+      const result = await this.resource.getAllWithPagination(page, limit, filterObj);
+
+      if (!result?.data?.length) {
+        return this.response.success('success.noRecordsFound', res, result);
+      }
+
+      // Use base helper for success message
+      return this.response.success('success.usersData', res, result);
+    } catch (error) {
+      return this._handleError(error, res, this.response); // Use base helper
     }
+  }
 
-    return response.success('success.usersData', res, result);
-  };
-
+  /**
+   * Logout user - Uses BaseController helpers
+   */
   logout = async (req, res) => {
-    console.log('UsersController@logout');
+    this._logAction('logout'); // Use base helper
 
-    const { user } = req;
+    try {
+      const { user } = req;
 
-    const dataToUpdate = {
-      auth_token: '',
-      fcm_token: '',
-    };
+      const dataToUpdate = {
+        auth_token: '',
+        fcm_token: '',
+      };
 
-    const hasUpdated = await UserResources.updateOne(user.id, dataToUpdate);
-    if (!hasUpdated) {
-      return response.exception('error.serverError', res, null);
+      const hasUpdated = await this.resource.updateOne(user.id, dataToUpdate);
+      if (!hasUpdated) {
+        return this.response.exception('error.serverError', res, null);
+      }
+
+      return this.response.success('auth.logoutSuccess', res, true);
+    } catch (error) {
+      return this._handleError(error, res, this.response); // Use base helper
     }
-
-    return response.success('auth.logoutSuccess', res, true);
-  };
+  }
 
   deleteOne = async (req, res) => {
-    console.log('UsersController@logout');
+    this._logAction('deleteOne'); // Use base helper
 
     const { user } = req;
 
@@ -428,7 +478,7 @@ class UserController {
       deleted_at: new Date().toISOString().replace('Z', '+00:00'),
     };
 
-    const hasDeleted = await UserResources.updateOne(user.id, dataToUpdate);
+    const hasDeleted = await this.resource.updateOne(user.id, dataToUpdate);
     if (!hasDeleted) {
       return response.exception('error.serverError', res, null);
     }
@@ -437,7 +487,7 @@ class UserController {
   };
 
   uploadImage = async (req, res) => {
-    console.log('UsersController@uploadImage');
+    this._logAction('uploadImage'); // Use base helper
 
     if (!req?.file?.path) {
       return response.badRequest('error.fileNotUploaded', res, false);
@@ -451,7 +501,7 @@ class UserController {
   };
 
   uploadBulkImages = async (req, res) => {
-    console.log('UsersController@uploadBulkImages');
+    this._logAction('uploadBulkImages'); // Use base helper
 
     const { files } = req;
     if (!files?.length) {
@@ -468,7 +518,7 @@ class UserController {
   };
 
   deleteImage = async (req, res) => {
-    console.log('UsersController@deleteImage');
+    this._logAction('deleteImage'); // Use base helper
 
     try {
       const { image_url } = req.body;
@@ -489,17 +539,17 @@ class UserController {
   };
 
   uploadImageAWS = async (req, res) => {
-    console.log('UsersController@uploadImageAWS');
+    this._logAction('uploadImageAWS'); // Use base helper
 
     return response.success('success.fileUploaded', res, { image_url: req.image_url });
   };
 
   deleteImageAWS = async (req, res) => {
-    console.log('UsersController@deleteImage');
+    this._logAction('deleteImageAWS'); // Use base helper
 
     const { image_url } = req.body;
 
-    const hasDeleted = await aws.deleteFile(image_url);
+    const hasDeleted = await this.aws.deleteFile(image_url);
     if (!hasDeleted) {
       return response.badRequest('error.fileNotFound', res, false);
     }
@@ -508,12 +558,12 @@ class UserController {
   };
 
   generatePresignedUrl = async (req, res) => {
-    console.log('UsersController@generatePresignedUrl');
+    this._logAction('generatePresignedUrl'); // Use base helper
 
     const { file_name, file_type, folder = 'uploads' } = req.body;
 
     try {
-      const result = await aws.getPresignedUrl(folder, file_name, file_type);
+      const result = await this.aws.getPresignedUrl(folder, file_name, file_type);
       if (!result) {
         return response.badRequest('error.serverError', res, false);
       }

@@ -4,9 +4,21 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const moment = require('moment-timezone');
 
+/**
+ * DataHelper - Data Processing Utility Class
+ *
+ * Provides data validation, transformation, and utility methods
+ * Singleton pattern - stateless utility class
+ */
 class DataHelper {
-  /* Valiate the request body as per the provided schema */
-  joiValidation = async (reqBody, schema) => {
+  /**
+   * Validate request body against Joi schema
+   * @param {Object} reqBody - Request body to validate
+   * @param {Object} schema - Joi schema object
+   * @param {string} _language - Language for error messages (default: 'en')
+   * @returns {Promise<Array|boolean>} - Array of errors or false if valid
+   */
+  async joiValidation(reqBody, schema, _language = 'en') {
     console.log('DataHelper@joiValidation');
 
     try {
@@ -14,36 +26,36 @@ class DataHelper {
       return false;
     } catch (errors) {
       const parsedErrors = [];
-
       if (errors?.details?.length) {
-        const errorDetails = errors.details;
-        errorDetails.forEach((e) => {
+        errors.details.forEach((e) => {
           const msg = e.message.replace(/"/g, '');
           parsedErrors.push(msg);
         });
       }
 
-      if (parsedErrors.length > 0) {
-        return parsedErrors;
-      }
-
-      return false;
+      return parsedErrors.length > 0 ? parsedErrors : false;
     }
-  };
+  }
 
-  /* Check the password strength */
-  checkPasswordRegex = async (password) => {
+  /**
+   * Check password strength against regex
+   * Requires: 1 uppercase, 1 lowercase, 1 number, 1 special char, min 8 chars
+   * @param {string} password - Password to validate
+   * @returns {Promise<boolean>}
+   */
+  async checkPasswordRegex(password) {
     console.log('DataHelper@passwordRegex');
 
     const passwordRegex = /^(?=.*?[A-Z])(?=.*?[a-z])(?=.*?[0-9])(?=.*[@$!%*?&]).{8,}/;
-    if (!passwordRegex.test(password)) {
-      return false;
-    }
-    return true;
-  };
+    return passwordRegex.test(password);
+  }
 
-  /* Convert password string into hash */
-  hashPassword = async (password) => {
+  /**
+   * Hash password using bcrypt
+   * @param {string} password - Plain text password
+   * @returns {Promise<string>} - Hashed password
+   */
+  async hashPassword(password) {
     console.log('DataHelper@hashPassword');
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -52,34 +64,38 @@ class DataHelper {
     }
 
     return hashedPassword;
-  };
+  }
 
-  /* Validate the hashed password and the password string */
-  validatePassword = async (passwordString, passwordHash) => {
+  /**
+   * Validate password against hash
+   * @param {string} passwordString - Plain text password
+   * @param {string} passwordHash - Hashed password
+   * @returns {Promise<boolean>}
+   */
+  async validatePassword(passwordString, passwordHash) {
     console.log('DataHelper@validatePassword');
 
-    const isPasswordValid = await bcrypt.compare(passwordString, passwordHash);
-    if (!isPasswordValid) {
-      return false;
-    }
+    return bcrypt.compare(passwordString, passwordHash);
+  }
 
-    return true;
-  };
-
-  /* Generate the JWT token */
-  generateJWTToken = async (data) => {
+  /**
+   * Generate JWT token
+   * @param {Object} data - Data to encode in token
+   * @returns {Promise<string|boolean>} - JWT token or false
+   */
+  async generateJWTToken(data) {
     console.log('DataHelper@generateJWTToken');
 
     const token = jwt.sign(data, process.env.JWT_TOKEN_KEY);
-    if (!token) {
-      return false;
-    }
+    return token || false;
+  }
 
-    return token;
-  };
-
-  /* Generate OTP */
-  generateSecureOTP = async (length = 6) => {
+  /**
+   * Generate secure OTP
+   * @param {number} length - OTP length (default: 6)
+   * @returns {Promise<string>} - Generated OTP
+   */
+  async generateSecureOTP(length = 6) {
     console.log('DataHelper@generateSecureOTP');
 
     const digits = '0123456789';
@@ -88,21 +104,24 @@ class DataHelper {
       otp += digits[crypto.randomInt(0, digits.length)];
     }
     return otp;
-  };
+  }
 
-  /** Validate the email */
-  isValidEmail = async (value) => {
-    // Regular expression for validating an email address
+  /**
+   * Validate email format
+   * @param {string} value - Email to validate
+   * @returns {Promise<boolean>}
+   */
+  async isValidEmail(value) {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(value);
+  }
 
-    if (emailRegex.test(value)) {
-      return true;
-    }
-    return false;
-  };
-
-  /** Extract the page and limit from query params */
-  getPageAndLimit = async (reqQuery) => {
+  /**
+   * Extract page and limit from query params
+   * @param {Object} reqQuery - Request query object
+   * @returns {Promise<Object>} - { page, limit }
+   */
+  async getPageAndLimit(reqQuery) {
     console.log('DataHelper@getPageAndLimit');
 
     const resObj = {
@@ -113,9 +132,7 @@ class DataHelper {
     if (reqQuery.page) {
       let pageNo = parseInt(reqQuery.page, 10);
 
-      if (typeof (pageNo) !== 'number') {
-        pageNo = 1;
-      } else if (pageNo < 1) {
+      if (typeof pageNo !== 'number' || pageNo < 1) {
         pageNo = 1;
       }
 
@@ -125,12 +142,11 @@ class DataHelper {
     if (reqQuery.limit) {
       let limit = parseInt(reqQuery.limit, 10);
 
-      if (typeof (limit) !== 'number') {
-        limit = 50;
-      } else if (limit < 1) {
+      if (typeof limit !== 'number' || limit < 1) {
         limit = 50;
       }
 
+      // Max limit is 100
       if (limit > 100) {
         limit = 100;
       }
@@ -139,27 +155,24 @@ class DataHelper {
     }
 
     return resObj;
-  };
+  }
 
-  /** Calculate the pagination param and return the offest */
-  calculatePagination = async (totalItems = null, currentPage = null, limit = null) => {
+  /**
+   * Calculate pagination parameters
+   * @param {number} totalItems - Total number of items
+   * @param {number} currentPage - Current page number
+   * @param {number} limit - Items per page
+   * @returns {Promise<Object>} - { currentPage, totalPages, offset, limit }
+   */
+  async calculatePagination(totalItems = null, currentPage = null, limit = null) {
     console.log('DataHelper@calculatePagination');
 
-    let pageNo = currentPage;
+    let page = currentPage || 1;
     let limitVal = limit;
 
-    // set a default currentPage if it's not provided
-    if (!pageNo) {
-      pageNo = 1;
-    }
-
-    // set a default limit if it's not provided
+    // Set default limit if not provided
     if (!limitVal) {
-      if (totalItems > 50) {
-        limitVal = 50;
-      } else {
-        limitVal = totalItems;
-      }
+      limitVal = totalItems > 50 ? 50 : totalItems;
     }
 
     let totalPages = Math.ceil(totalItems / limitVal);
@@ -167,34 +180,36 @@ class DataHelper {
       totalPages = 1;
     }
 
-    // if the page number requested is greater than the total pages, set page number to total pages
-    if (pageNo > totalPages) {
-      pageNo = totalPages;
+    // If page number exceeds total pages, set to last page
+    if (page > totalPages) {
+      page = totalPages;
     }
 
-    let offset;
-    if (pageNo > 1) {
-      offset = (pageNo - 1) * limitVal;
-    } else {
-      offset = 0;
-    }
+    const offset = page > 1 ? (page - 1) * limitVal : 0;
 
     return {
-      currentPage: pageNo,
+      currentPage: page,
       totalPages,
       offset,
       limit: limitVal,
     };
-  };
+  }
 
-  /** Convert into a specific timezone */
-  convertDateTimezoneAndFormat = async (date, timezone = 'UTC', format = 'YYYY-MM-DDTHH:mm:ssZ') => {
+  /**
+   * Convert date to specific timezone and format
+   * @param {Date|string} date - Date to convert
+   * @param {string} timezone - Target timezone (default: 'UTC')
+   * @param {string} format - Date format (default: 'YYYY-MM-DDTHH:mm:ssZ')
+   * @returns {Promise<string|null>} - Formatted date string
+   */
+  async convertDateTimezoneAndFormat(date, timezone = 'UTC', format = 'YYYY-MM-DDTHH:mm:ssZ') {
     console.log('DataHelper@convertDateTimezoneAndFormat');
 
     if (!date) return null;
 
     return moment(date).tz(timezone).format(format);
-  };
+  }
 }
 
+// Export singleton instance
 module.exports = new DataHelper();

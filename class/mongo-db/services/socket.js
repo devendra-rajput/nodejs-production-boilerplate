@@ -1,114 +1,201 @@
 const jwt = require('jsonwebtoken');
 const { Server } = require('socket.io');
-
-/** Custom Require * */
+const { BaseService } = require('../core');
 const i18n = require('../config/i18n');
 const UserModel = require('../resources/v1/users/users.model');
 const socketEvents = require('../constants/socket_events');
 
-let io;
+/**
+ * SocketService - Extends BaseService
+ *
+ * Handles Socket.IO real-time communication
+ * Demonstrates:
+ * - Inheritance: Extends BaseService
+ * - Encapsulation: Uses protected methods from base class
+ * - Singleton Pattern: Single io instance
+ */
+class SocketService extends BaseService {
+  constructor() {
+    super('SocketService');
+    this.io = null;
+  }
 
-// Wrap jwt.verify into a Promise for better async/await support
-const verifyToken = (token) => new Promise((resolve, reject) => {
-  jwt.verify(token, process.env.JWT_TOKEN_KEY, (err, decoded) => {
-    if (err) {
-      return reject(err); // Reject with the error if verification fails
+  /**
+   * Verify JWT token
+   * @private
+   */
+  _verifyToken(token) {
+    return new Promise((resolve, reject) => {
+      jwt.verify(token, process.env.JWT_TOKEN_KEY, (err, decoded) => {
+        if (err) {
+          return reject(err);
+        }
+        resolve(decoded);
+      });
+    });
+  }
+
+  /**
+   * Extract token from socket handshake
+   * @private
+   */
+  _extractToken(socket) {
+    let token = socket.handshake.headers.authorization;
+
+    if (!token && socket?.handshake?.auth?.token) {
+      token = socket.handshake.auth.token;
     }
-    resolve(decoded); // Resolve with decoded payload if token is valid
-  });
-});
 
-const initSocket = (httpServer) => {
-  const socketConfig = {
-    path: '/socket.io', // Standard path
-    cors: {
-      origin: '*', // Adjust as needed for security
-      methods: ['GET', 'POST'],
-    },
-  };
+    if (token && token.startsWith('Bearer ')) {
+      [, token] = token.split(' ');
+    }
 
-  io = new Server(httpServer, socketConfig);
-  console.log('Socket.IO initialized on path:', socketConfig.path);
+    return token;
+  }
 
-  if (!io) {
-    throw new Error('Socket.io not initialized');
-  } else {
-    io.use(async (socket, next) => {
-      let token = socket.handshake.headers.authorization;
-
-      // Also check for token in the standard auth object
-      if (!token && socket?.handshake?.auth?.token) {
-        token = socket.handshake.auth.token;
-      }
+  /**
+   * Socket authentication middleware
+   * @private
+   */
+  async _authenticateSocket(socket, next) {
+    return this._executeWithErrorHandling('authenticateSocket', async () => {
+      const token = this._extractToken(socket);
 
       if (!token) {
         return next(new Error(i18n.__('socket.noToken')));
       }
 
-      if (token.startsWith('Bearer ')) {
-        [, token] = token.split(' ');
+      // Verify token
+      const decoded = await this._verifyToken(token);
+
+      // Find user
+      const user = await UserModel.getOneByColumnNameAndValue('_id', decoded.user_id);
+      if (!user) {
+        return next(new Error(i18n.__('socket.noUserFound')));
       }
 
-      try {
-        /** Verify the token */
-        const decoded = await verifyToken(token);
-
-        /** Find user by decoded user_id */
-        const user = await UserModel.getOneByColumnNameAndValue('_id', decoded.user_id);
-        if (!user) {
-          return next(new Error(i18n.__('socket.noUserFound')));
-        }
-
-        /** Check if the token matches the stored auth_token for the user */
-        if (!user?.tokens?.auth_token || user.tokens.auth_token !== token) {
-          return next(new Error(i18n.__('socket.tokenMismatch')));
-        }
-
-        /** Attach user info to socket for future use */
-        // eslint-disable-next-line no-param-reassign
-        socket.user = user;
-
-        next();
-      } catch (err) {
-        console.error('Socket Auth Error:', err);
-        return next(new Error(i18n.__('socket.invalidToken')));
-      }
-    });
-
-    io.on('connection', async (socket) => {
-      /** Store the user's socket id in to temp DB (Redis) */
-      const userId = socket.user?._id;
-      console.log(`User connected: ${userId} (Socket ID: ${socket.id})`);
-
-      // Join a room specific to this user for easy targeting
-      // Room name: user_<id>
-      if (userId) {
-        socket.join(`user_${userId}`);
-        console.log(`Socket ${socket.id} joined room user_${userId}`);
+      // Check token match
+      if (!user?.tokens?.auth_token || user.tokens.auth_token !== token) {
+        return next(new Error(i18n.__('socket.tokenMismatch')));
       }
 
-      // This is a test event
-      socket.on(socketEvents.ON.TEST_EVENT, (data, callback) => {
-        callback({ message: 'Test event received', data });
-      });
+      // Attach user to socket
+      // eslint-disable-next-line no-param-reassign
+      socket.user = user;
 
-      socket.on('disconnect', () => {
-        console.log(`User disconnected: ${userId}`);
-      });
+      next();
+    }).catch((error) => {
+      console.error(`${this.serviceName}@authenticateSocket Error:`, error);
+      return next(new Error(i18n.__('socket.invalidToken')));
     });
   }
-};
 
-const emitToUsers = (userIds, event, data) => {
-  if (io) {
+  /**
+   * Handle socket connection
+   * @private
+   */
+  _handleConnection(socket) {
+    const userId = socket.user?._id;
+    console.log(`${this.serviceName}: User connected - ${userId} (Socket ID: ${socket.id})`);
+
+    // Join user-specific room
+    if (userId) {
+      socket.join(`user_${userId}`);
+      console.log(`${this.serviceName}: Socket ${socket.id} joined room user_${userId}`);
+    }
+
+    // Test event
+    socket.on(socketEvents.ON.TEST_EVENT, (data, callback) => {
+      callback({ message: 'Test event received', data });
+    });
+
+    // Disconnect event
+    socket.on('disconnect', () => {
+      console.log(`${this.serviceName}: User disconnected - ${userId}`);
+    });
+  }
+
+  /**
+   * Initialize Socket.IO server
+   * @param {Object} httpServer - HTTP server instance
+   * @override
+   */
+  async initialize(httpServer) {
+    return this._executeWithErrorHandling('initialize', async () => {
+      this._validateParams({ httpServer }, ['httpServer']);
+
+      const socketConfig = {
+        path: '/socket.io',
+        cors: {
+          origin: '*',
+          methods: ['GET', 'POST'],
+        },
+      };
+
+      this.io = new Server(httpServer, socketConfig);
+      console.log(`${this.serviceName}: Initialized on path ${socketConfig.path}`);
+
+      // Setup authentication middleware
+      this.io.use((socket, next) => this._authenticateSocket(socket, next));
+
+      // Handle connections
+      this.io.on('connection', (socket) => this._handleConnection(socket));
+
+      this._setInitialized(true);
+      return true;
+    });
+  }
+
+  /**
+   * Emit event to specific users
+   * @param {Array<string>} userIds - Array of user IDs
+   * @param {string} event - Event name
+   * @param {*} data - Data to emit
+   */
+  emitToUsers(userIds, event, data) {
+    if (!this.io) {
+      console.warn(`${this.serviceName}: Cannot emit - Socket.IO not initialized`);
+      return false;
+    }
+
     userIds.forEach((userId) => {
-      io.to(`user_${userId}`).emit(event, data);
+      this.io.to(`user_${userId}`).emit(event, data);
+    });
+
+    return true;
+  }
+
+  /**
+   * Get Socket.IO instance
+   * @returns {Server|null}
+   */
+  getIO() {
+    return this.io;
+  }
+
+  /**
+   * Cleanup Socket.IO server
+   * @override
+   */
+  async cleanup() {
+    return this._executeWithErrorHandling('cleanup', async () => {
+      if (this.io) {
+        this.io.close();
+        this.io = null;
+      }
+      this._setInitialized(false);
+      console.log(`${this.serviceName}: Cleanup completed`);
+      return true;
     });
   }
-};
+}
+
+// Export singleton instance
+const socketService = new SocketService();
 
 module.exports = {
-  io,
-  initSocket,
-  emitToUsers,
+  io: socketService.getIO(),
+  initSocket: (httpServer) => socketService.initialize(httpServer),
+  emitToUsers: (userIds, event, data) => socketService.emitToUsers(userIds, event, data),
+  socketService, // Export instance for direct access if needed
 };

@@ -9,75 +9,144 @@ const {
   DeleteObjectCommand,
 } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
-
-/** Custom Require * */
+const { BaseService } = require('../core');
 const response = require('../helpers/v1/response.helpers');
 
-class AWSService {
+/**
+ * AWSService - Extends BaseService
+ *
+ * Handles AWS S3 file operations
+ * Demonstrates:
+ * - Inheritance: Extends BaseService
+ * - Encapsulation: Uses protected methods from base class
+ * - Error Handling: Uses _executeWithErrorHandling
+ */
+class AWSService extends BaseService {
   constructor() {
-    // Created AWS S3 instance
-    this.s3 = new S3Client({
-      region: process.env.AWS_REGION,
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-      },
-    });
+    super('AWSService');
+    this.s3 = null;
     this.bucketName = process.env.AWS_S3_BUCKET_NAME;
+
+    // Automatically bind all public methods to preserve 'this' context
+    // This is necessary because Express passes methods as callbacks
+    this._autoBindMethods();
   }
 
-  // Upload a single file to AWS S3 after storing locally
-  uploadFile = async (req, res, next) => {
-    console.log('AWSService@uploadFile');
+  /**
+   * Initialize S3 client
+   * @override
+   */
+  async initialize() {
+    return this._executeWithErrorHandling('initialize', async () => {
+      this.s3 = new S3Client({
+        region: process.env.AWS_REGION,
+        credentials: {
+          accessKeyId: process.env.AWS_ACCESS_KEY,
+          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+        },
+      });
 
-    if (!req?.file?.path) {
-      return response.badRequest('error.fileNotFound', res, false);
+      this._setInitialized(true);
+      console.log(`${this.serviceName}: S3 client initialized`);
+      return true;
+    }).catch((error) => {
+      return response.exception('error.serverError', res, {
+        error: typeof error === "string" ? error : error.message
+      });
+    });
+  }
+
+  /**
+   * Get or create S3 client
+   * @private
+   */
+  async _getS3Client() {
+    if (!this.s3) {
+      await this.initialize();
+    }
+    return this.s3;
+  }
+
+  /**
+   * Generate upload directory path
+   * @private
+   */
+  _getUploadDirectory() {
+    const dateObj = new Date();
+    return `${dateObj.getFullYear()}/${dateObj.getMonth() + 1}/${dateObj.getDate()}`;
+  }
+
+  /**
+   * Convert HEIC to JPEG if needed
+   * @private
+   */
+  async _convertHeicIfNeeded(file, fileBuffer) {
+    if (file.mimetype === 'image/heic' || file.mimetype === 'image/heif') {
+      const jpegBuffer = await heicConvert({
+        buffer: fileBuffer,
+        format: 'JPEG',
+        quality: 0.8,
+      });
+
+      return {
+        buffer: jpegBuffer,
+        fileName: file.originalname.replace(/\.heic|\.heif$/, '.jpeg'),
+        contentType: 'image/jpeg',
+      };
     }
 
-    try {
-      const { file } = req;
+    return {
+      buffer: fileBuffer,
+      fileName: file.originalname,
+      contentType: file.mimetype,
+    };
+  }
 
-      const dateObj = new Date();
-      const uploadDirectory = `${dateObj.getFullYear()}/${dateObj.getMonth() + 1}/${dateObj.getDate()}`;
-      let fileName = `${file.fieldname}-${uuidv4()}-${moment().unix()}${path.extname(file.originalname)}`;
-      let contentType = file.mimetype;
+  /**
+   * Upload a single file to AWS S3
+   * @param {Object} req - Express request object
+   * @param {Object} res - Express response object
+   * @param {Function} next - Express next function
+   */
+  async uploadFile(req, res, next) {
+    return this._executeWithErrorHandling('uploadFile', async () => {
+      if (!req?.file?.path) {
+        return response.badRequest('error.fileNotFound', res, false);
+      }
+
+      const { file } = req;
+      const s3 = await this._getS3Client();
+
+      // Read file buffer
       // eslint-disable-next-line security/detect-non-literal-fs-filename
       let fileBuffer = await fs.promises.readFile(file.path);
 
-      // Convert HEIC to JPEG if necessary
-      if (file.mimetype === 'image/heic' || file.mimetype === 'image/heif') {
-        const jpegBuffer = await heicConvert({
-          buffer: fileBuffer,
-          format: 'JPEG',
-          quality: 0.8,
-        });
+      // Convert HEIC if needed
+      const converted = await this._convertHeicIfNeeded(file, fileBuffer);
+      fileBuffer = converted.buffer;
 
-        fileBuffer = jpegBuffer; // Use converted buffer
-        fileName = fileName.replace(/\.heic|\.heif$/, '.jpeg');
-        contentType = 'image/jpeg';
-      }
-
-      // Defined S3 bucket params to upload the file
+      // Generate file name and key
+      const uploadDirectory = this._getUploadDirectory();
+      const fileName = `${file.fieldname}-${uuidv4()}-${moment().unix()}${path.extname(converted.fileName)}`;
       const key = `${uploadDirectory}/${fileName}`;
+
+      // Upload to S3
       const params = {
         Bucket: this.bucketName,
         Key: key,
         Body: fileBuffer,
-        ACL: 'public-read',
-        ContentType: contentType,
+        // ACL: 'public-read',
+        ContentType: converted.contentType,
       };
 
-      // Upload using v3 command
       const command = new PutObjectCommand(params);
-      await this.s3.send(command);
+      await s3.send(command);
 
-      // Construct public URL manually
+      // Construct public URL
       const fileUrl = `https://${this.bucketName}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
-
-      // Attached uploaded image URL with request for further use
       req.image_url = fileUrl;
 
-      // Delete file after uploading to S3
+      // Delete local file
       // eslint-disable-next-line security/detect-non-literal-fs-filename
       if (fs.existsSync(file.path)) {
         // eslint-disable-next-line security/detect-non-literal-fs-filename
@@ -85,41 +154,50 @@ class AWSService {
       }
 
       next();
-    } catch (error) {
-      console.log('Upload error:', error);
-      return response.badRequest('error.fileNotUploaded', res, false);
-    }
-  };
+    }).catch((error) => {
+      return response.exception('error.fileNotUploaded', res, {
+        error: typeof error === "string" ? error : error.message
+      });
+    });
+  }
 
-  deleteFile = async (fileUrl) => {
-    console.log('AWSService@deleteFile');
+  /**
+   * Delete file from S3
+   * @param {string} fileUrl - File URL to delete
+   * @returns {Promise<boolean>}
+   */
+  async deleteFile(fileUrl) {
+    return this._executeWithErrorHandling('deleteFile', async () => {
+      this._validateParams({ fileUrl }, ['fileUrl']);
 
-    // const bucket = process.env.AWS_S3_BUCKET_NAME;
-    const url = new URL(fileUrl);
-    const key = decodeURIComponent(url.pathname.substring(1)); // remove leading `/`
+      const s3 = await this._getS3Client();
+      const url = new URL(fileUrl);
+      const key = decodeURIComponent(url.pathname.substring(1));
 
-    try {
       const command = new DeleteObjectCommand({
         Bucket: this.bucketName,
         Key: key,
       });
 
-      await this.s3.send(command);
-
+      await s3.send(command);
       return true;
-    } catch (err) {
-      console.log('Delete file error:', err);
-      return false;
-    }
-  };
+    })
+  }
 
-  getPresignedUrl = async (folder, fileName, fileType, expiry = 5 * 60) => {
-    console.log('AWSService@getPresignedUrl');
-    try {
-      const dateObj = new Date();
-      const uploadDirectory = `${dateObj.getFullYear()}/${dateObj.getMonth() + 1}/${dateObj.getDate()}`;
+  /**
+   * Get presigned URL for direct upload
+   * @param {string} folder - Folder name
+   * @param {string} fileName - File name
+   * @param {string} fileType - File MIME type
+   * @param {number} expiry - URL expiry in seconds (default: 5 minutes)
+   * @returns {Promise<Object|boolean>}
+   */
+  async getPresignedUrl(folder, fileName, fileType, expiry = 5 * 60) {
+    return this._executeWithErrorHandling('getPresignedUrl', async () => {
+      this._validateParams({ folder, fileName, fileType }, ['folder', 'fileName', 'fileType']);
 
-      // Sanitize filename and make unique
+      const s3 = await this._getS3Client();
+      const uploadDirectory = this._getUploadDirectory();
       const uniqueFileName = `${uuidv4()}-${moment().unix()}${path.extname(fileName)}`;
       const key = `${folder}/${uploadDirectory}/${uniqueFileName}`;
 
@@ -127,14 +205,10 @@ class AWSService {
         Bucket: this.bucketName,
         Key: key,
         ContentType: fileType,
-        // ACL: "public-read", // Optional depending on bucket policy
       };
 
       const command = new PutObjectCommand(params);
-
-      // 5 minutes expiry
-      const signedUrl = await getSignedUrl(this.s3, command, { expiresIn: expiry });
-
+      const signedUrl = await getSignedUrl(s3, command, { expiresIn: expiry });
       const publicUrl = `https://${this.bucketName}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
 
       return {
@@ -142,12 +216,24 @@ class AWSService {
         publicUrl,
         key,
       };
-    } catch (err) {
-      console.log('AWSService@getPresignedUrl Error: ', err);
-      return false;
-    }
-  };
+    });
+  }
+
+  /**
+   * Cleanup S3 client
+   * @override
+   */
+  async cleanup() {
+    return this._executeWithErrorHandling('cleanup', async () => {
+      if (this.s3) {
+        this.s3.destroy();
+        this.s3 = null;
+      }
+      this._setInitialized(false);
+      console.log(`${this.serviceName}: Cleanup completed`);
+      return true;
+    });
+  }
 }
 
-// Export all functions
 module.exports = new AWSService();

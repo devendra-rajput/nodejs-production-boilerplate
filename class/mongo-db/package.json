@@ -26,6 +26,7 @@
     "ejs": "^3.1.10",
     "eslint-plugin-security": "^3.0.1",
     "express": "^5.1.0",
+    "express-ejs-layouts": "^2.5.1",
     "heic-convert": "^2.1.0",
     "helmet": "^8.1.0",
     "i18n": "^0.15.1",

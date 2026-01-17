@@ -1,6 +1,6 @@
 # Node JS Production Boilerplate
 
-A production-ready Node JS boilerplate for building secure, scalable, and maintainable backend applications.
+A production-ready Node.js boilerplate for building secure, scalable, and maintainable backend applications.
 
 ## 🚀 Features
 
@@ -21,6 +21,92 @@ A production-ready Node JS boilerplate for building secure, scalable, and mainta
 -   **Database**: MySQL (Sequelize ORM)
 -   **Caching**: Redis
 -   **Process Manager**: PM2
+-   **Architecture**: Object-Oriented Programming (OOP) with SOLID Principles
+
+## 🏗️ Architecture
+
+This boilerplate follows **Object-Oriented Programming (OOP)** architecture with:
+
+- **Inheritance**: Base classes for Controllers, Resources, Services, Middleware, and Utilities
+- **Encapsulation**: Private and protected methods for internal logic
+- **Polymorphism**: Method overriding for specialized behavior
+- **Abstraction**: Abstract base classes with common interfaces
+- **SOLID Principles**: Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Injection
+
+**For detailed architecture documentation, see [OOP_ARCHITECTURE.md](./OOP_ARCHITECTURE.md)**
+
+## � Project Structure
+
+```
+class/mysql
+├── index.js                    # Application entry point
+├── bootstrap/                  # Application bootstrap components
+│   ├── serverManager.js        # HTTP/HTTPS server lifecycle
+│   ├── processManager.js       # Process signal handling
+│   ├── setup.js                # Express app configuration
+│   └── routes.js               # Dynamic route loader
+├── core/                       # Base classes (OOP foundation)
+│   ├── BaseController.js
+│   ├── BaseResource.js
+│   ├── BaseService.js
+│   ├── BaseValidation.js
+│   └── BaseRoute.js
+├── resources/v1/               # API resources (versioned)
+│   └── users/
+│       ├── users.controller.js # User controller
+│       ├── users.resource.js   # User resource
+│       ├── users.validation.js # User validation
+│       ├── users.swagger.js    # Swagger documentation
+│       └── user.model.js       # MySQL schema
+├── routes/                     # Route definitions
+│   └── users.js                # User routes
+├── services/                   # External services
+│   ├── redis.js
+│   ├── aws.js
+│   ├── nodemailer.js
+│   └── socket.js
+├── middleware/                 # Express middleware
+│   ├── error.js                # Global error handler
+│   ├── rateLimiter.js          # Rate limiting
+│   ├── timezone.js             # Timezone handling
+│   └── v1/authorize.js         # JWT authentication
+├── migrations/                 # Database migrations
+│   └── create_users_table.js   # User migration
+├── helpers/                    # Helper classes
+│   └── v1/
+│       ├── response.helpers.js
+│       └── data.helpers.js
+├── utils/                      # Utility classes
+│   ├── logger.js
+│   ├── upload.js
+│   └── envValidator.js
+├── config/                     # Configuration files
+│   ├── i18n.js                 # Internationalization
+│   ├── cors.js                 # CORS configuration
+│   └── v1/
+│       ├── mysql.js            # MySQL DB connection
+│       └── redis.js            # Redis connection
+├── seeders/                    # Database seeders
+│   └── users.js                # User seeder
+├── views/                      # EJS templates
+│   ├── layout.ejs              # Base layout
+│   ├── privacy.ejs             # Privacy policy
+│   └── terms.ejs               # Terms of service
+├── public/                     # Static assets
+│   └── css/static-pages.css
+├── locales/                    # i18n translations
+│   ├── en.json
+│   └── hi.json
+├── tests/                      # Test scripts
+│   ├── test-rate-limiter.js
+│   └── test-multi-ip.js
+├── logs/                       # Application logs
+├── uploads/                    # Temporary file uploads
+└── emailTemplates/             # Email templates
+    └── v1
+        ├── forgotPassword.js
+        └── verification.js
+```
 
 ## 🛠️ Setup
 
@@ -70,6 +156,23 @@ A production-ready Node JS boilerplate for building secure, scalable, and mainta
   ```bash
   pm2 start ecosystem.config.js --env production
   ```
+
+## 🛡️ Graceful Shutdown
+
+The application implements graceful shutdown to ensure clean termination:
+
+- **Automatic cleanup** of all services (Redis, Nodemailer, AWS, Socket.IO)
+- **Proper connection closure** to prevent resource leaks
+- **Signal handling** for SIGTERM, SIGINT, and uncaught exceptions
+- **Production-ready** for PM2, Docker, and Kubernetes deployments
+
+**Shutdown triggers**:
+- `Ctrl+C` (SIGINT) - Manual shutdown
+- `kill <pid>` (SIGTERM) - System shutdown
+- PM2 restart - Process manager
+- Docker/K8s stop - Container orchestration
+
+All services implement `cleanup()` methods that are automatically called during shutdown to close connections and free resources.
 
 ## 📚 Documentation
 
@@ -194,6 +297,5 @@ npm run lint:fix
 
 -   **Rate Limiting**: 10 requests per second per IP.
 -   **Headers**: Secure HTTP headers via Helmet.
--   **CORS**: Configured for cross-origin resource sharing.
 -   **Trusted Proxy**: Only localhost proxies are trusted for client IP resolution, preventing IP spoofing.
 -   **CORS**: CORS is enforced by browsers only. Server-to-server requests (Postman, curl, internal services) are not restricted by CORS.

@@ -15,8 +15,8 @@ const UsersSchema = new mongoose.Schema({
     fcm_token: { type: String, default: '' },
   },
   otp: {
-    email_verification: { type: String, default: '' },
-    forgot_password: { type: String, default: '' },
+    email_verification: { type: Number, default: null },
+    forgot_password: { type: Number, default: null },
   },
   status: { type: String, enum: ['0', '1', '2', '3'], default: '1' }, // 0 => In-active, 1 => Active, 2 => Blocked, 3 => Deleted
   role: { type: String, enum: ['user', 'admin'], default: 'user' },

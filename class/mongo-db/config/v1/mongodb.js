@@ -14,10 +14,8 @@ const connectDB = async () => {
 
     return db;
   } catch (err) {
-    console.log('error connecting to MongoDB: ', err.message);
-    console.log('Retrying MongoDB connection in 5 seconds...');
-    await new Promise((resolve) => { setTimeout(resolve, 5000); });
-    return connectDB();
+    console.error(`MongoDB Error: ${err.message}`);
+    process.exit(1);
   }
 };
 
