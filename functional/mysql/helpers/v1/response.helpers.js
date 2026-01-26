@@ -1,97 +1,140 @@
+/**
+ * Response Helpers
+ * Standardized HTTP response functions with i18n support
+ */
+
 const i18n = require('../../config/i18n');
 
-const sendResponse = async (code, msg, res, data) => {
+const HTTP_STATUS = {
+  OK: 200,
+  CREATED: 201,
+  NO_CONTENT: 204,
+  MOVED_TEMPORARILY: 302,
+  BAD_REQUEST: 400,
+  UNAUTHORIZED: 401,
+  FORBIDDEN: 403,
+  NOT_FOUND: 404,
+  METHOD_NOT_ALLOWED: 405,
+  CONFLICT: 409,
+  UNPROCESSABLE_ENTITY: 422,
+  INTERNAL_SERVER_ERROR: 500,
+};
+
+/**
+ * Create response body with i18n message
+ */
+const createResponseBody = (statusCode, message, data = null) => {
+  const body = {
+    statusCode,
+    api_ver: process.env.API_VER || 'v1',
+    message: i18n.__(message),
+  };
+
+  // Only add data property if data exists
+  if (data !== null && data !== undefined) {
+    body.data = data;
+  }
+
+  return body;
+};
+
+/**
+ * Set CORS headers on response
+ */
+const setCORSHeaders = (res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET,PUT,PATCH,POST,DELETE,OPTIONS');
-
-  const responseBody = {
-    statusCode: code,
-    api_ver: process.env.API_VER || 'v1',
-    message: i18n.__(msg),
-  };
-
-  if (data) responseBody.data = data;
-
-  return res.status(code).send(responseBody);
+  return res;
 };
 
-const success = async (msg, res, data) => {
-  sendResponse(200, msg, res, data);
+/**
+ * Send HTTP response
+ */
+const sendResponse = (statusCode, message, res, data = null) => {
+  const body = createResponseBody(statusCode, message, data);
+  setCORSHeaders(res);
+  return res.status(statusCode).send(body);
 };
 
-const created = async (msg, res, data) => {
-  sendResponse(201, msg, res, data);
-};
+/**
+ * Create response function for specific status code
+ */
+const createResponseFunction = (statusCode) => (
+  (message, res, data = null) => sendResponse(statusCode, message, res, data)
+);
 
-const disallowed = async (msg, res, data) => {
-  sendResponse(405, msg, res, data);
-};
+// Success Responses (2xx)
+const success = createResponseFunction(HTTP_STATUS.OK);
+const created = createResponseFunction(HTTP_STATUS.CREATED);
+const noContent = createResponseFunction(HTTP_STATUS.NO_CONTENT);
 
-const noContent = async (msg, res, data) => {
-  sendResponse(204, msg, res, data);
-};
+// Client Error Responses (4xx)
+const badRequest = createResponseFunction(HTTP_STATUS.BAD_REQUEST);
+const unauthorized = createResponseFunction(HTTP_STATUS.UNAUTHORIZED);
+const forbidden = createResponseFunction(HTTP_STATUS.FORBIDDEN);
+const notFound = createResponseFunction(HTTP_STATUS.NOT_FOUND);
+const disallowed = createResponseFunction(HTTP_STATUS.METHOD_NOT_ALLOWED);
+const conflict = createResponseFunction(HTTP_STATUS.CONFLICT);
+const validationError = createResponseFunction(HTTP_STATUS.UNPROCESSABLE_ENTITY);
 
-const badRequest = async (msg, res, data) => {
-  sendResponse(400, msg, res, data);
-};
+// Server Error Responses (5xx)
+const exception = createResponseFunction(HTTP_STATUS.INTERNAL_SERVER_ERROR);
 
-const validationError = async (msg, res, data) => {
-  sendResponse(422, msg, res, data);
-};
+/**
+ * Send custom status code response
+ */
+const custom = (statusCode, message, res, data = null) => (
+  sendResponse(statusCode, message, res, data)
+);
 
-const unauthorized = async (msg, res, data) => {
-  sendResponse(401, msg, res, data);
-};
-
-const forbidden = async (msg, res, data) => {
-  sendResponse(403, msg, res, data);
-};
-
-const notFound = async (msg, res, data) => {
-  sendResponse(404, msg, res, data);
-};
-
-const exception = async (msg, res, data) => {
-  sendResponse(500, msg, res, data);
-};
-
-const conflict = async (msg, res, data) => {
-  sendResponse(409, msg, res, data);
-};
-
-const custom = async (code, msg, res, data) => {
-  sendResponse(code, msg, res, data);
-};
-
-const redirect = async (url, res) => res.status(302).send({
-  api_ver: process.env.API_VER,
+/**
+ * Send redirect response
+ */
+const redirect = (url, res) => res.status(HTTP_STATUS.MOVED_TEMPORARILY).send({
+  api_ver: process.env.API_VER || 'v1',
   redirect_to: url,
 });
 
-const twoFactorEnabled = async (res) => {
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  return res.status(200).send({
-    api_ver: process.env.API_VER,
-    msg: 'TwoFactor authentication has been enabled for your account. We have sent you an access code to the phone associated to your account. Please verify the code to proceed',
+/**
+ * Send two-factor authentication enabled response
+ */
+const twoFactorEnabled = (res) => {
+  setCORSHeaders(res);
+  return res.status(HTTP_STATUS.OK).send({
+    api_ver: process.env.API_VER || 'v1',
+    message: i18n.__('auth.twoFactorEnabled'),
     two_factor: true,
   });
 };
 
 module.exports = {
+  // Core functions
+  sendResponse,
+  createResponseBody,
+
+  // Success responses
   success,
   created,
-  disallowed,
   noContent,
+
+  // Client error responses
   badRequest,
-  validationError,
   unauthorized,
   forbidden,
   notFound,
-  exception,
+  disallowed,
   conflict,
+  validationError,
+
+  // Server error responses
+  exception,
+
+  // Specialized responses
   custom,
   redirect,
   twoFactorEnabled,
-  sendResponse,
+
+  // Constants
+  HTTP_STATUS,
 };

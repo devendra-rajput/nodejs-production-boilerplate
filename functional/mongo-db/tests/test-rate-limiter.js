@@ -1,178 +1,290 @@
+/**
+ * Rate Limiter Test Utility
+ */
+
 const http = require('http');
 const https = require('https');
 
-class RateLimiterTester {
-  constructor(baseUrl = 'http://localhost:8000') {
-    this.baseUrl = baseUrl;
-    this.stats = {
-      successful: 0,
-      blocked: 0,
-      errors: 0,
-      total: 0,
-    };
+/**
+ * Default test configuration
+ */
+const DEFAULT_CONFIG = {
+  baseUrl: 'http://localhost:8000',
+  endpoint: '/load-test',
+  requestsPerSecond: 250,
+  durationSeconds: 5,
+  batchSize: 50,
+  batchDelay: 10,
+  timeout: 3000,
+};
+
+/**
+ * Create empty statistics object
+ */
+const createEmptyStats = () => ({
+  successful: 0,
+  blocked: 0,
+  errors: 0,
+  total: 0,
+});
+
+/**
+ * Update statistics with result
+ */
+const updateStats = (stats, result) => {
+  const newStats = { ...stats, total: stats.total + 1 };
+
+  if (result.statusCode === 200) {
+    newStats.successful += 1;
+  } else if (result.statusCode === 429) {
+    newStats.blocked += 1;
+  } else {
+    newStats.errors += 1;
   }
 
-  makeRequest(endpoint = '/load-test') {
-    return new Promise((resolve) => {
-      const url = new URL(endpoint, this.baseUrl);
-      const protocol = url.protocol === 'https:' ? https : http;
+  return newStats;
+};
 
-      const options = {
-        hostname: url.hostname,
-        port: url.port || (url.protocol === 'https:' ? 443 : 80),
-        path: url.pathname,
-        method: 'GET',
-        timeout: 3000,
-      };
+/**
+ * Calculate success rate
+ */
+const calculateSuccessRate = (successful, total) => {
+  if (total === 0) return '0.00';
+  return ((successful / total) * 100).toFixed(2);
+};
 
-      const startTime = Date.now();
-      const req = protocol.request(options, (res) => {
-        let data = '';
-        res.on('data', (chunk) => {
-          data += chunk;
-        });
+/**
+ * Parse URL
+ */
+const parseUrl = (baseUrl, endpoint) => {
+  const url = new URL(endpoint, baseUrl);
+  return {
+    protocol: url.protocol === 'https:' ? https : http,
+    hostname: url.hostname,
+    port: url.port || (url.protocol === 'https:' ? 443 : 80),
+    path: url.pathname,
+  };
+};
 
-        res.on('end', () => {
-          const duration = Date.now() - startTime;
-          resolve({
-            statusCode: res.statusCode,
-            duration,
-            data,
-            success: res.statusCode === 200,
-          });
-        });
-      });
+/**
+ * Make HTTP request
+ */
+const makeRequest = (baseUrl, endpoint, timeout) => new Promise((resolve) => {
+  const urlComponents = parseUrl(baseUrl, endpoint);
+  const { protocol, ...options } = urlComponents;
 
-      req.on('error', (error) => {
-        resolve({
-          statusCode: 0,
-          duration: Date.now() - startTime,
-          error: error.message,
-          success: false,
-        });
-      });
+  const requestOptions = {
+    ...options,
+    method: 'GET',
+    timeout,
+  };
 
-      req.on('timeout', () => {
-        req.destroy();
-        resolve({
-          statusCode: 0,
-          duration: Date.now() - startTime,
-          error: 'Timeout',
-          success: false,
-        });
-      });
+  const startTime = Date.now();
+  const req = protocol.request(requestOptions, (res) => {
+    let data = '';
 
-      req.end();
+    res.on('data', (chunk) => {
+      data += chunk;
     });
-  }
 
-  async testRateLimit(requestsPerSecond = 250, durationSeconds = 5) {
-    console.log('🚀 Starting rate limiter test...');
-    console.log(`📊 Target: ${requestsPerSecond} requests/second for ${durationSeconds} seconds\n`);
-
-    const results = [];
-
-    for (let second = 0; second < durationSeconds; second += 1) {
-      console.log(`\n⏰ Second ${second + 1}: Sending ${requestsPerSecond} requests...`);
-
-      const secondPromises = [];
-      const batchSize = 50; // Process in batches to avoid too many concurrent connections
-
-      for (let i = 0; i < requestsPerSecond; i += 1) {
-        const requestIndex = (second * requestsPerSecond) + i + 1;
-
-        // Add small delay between batches
-        if (i % batchSize === 0) {
-          // eslint-disable-next-line no-await-in-loop
-          await new Promise((resolve) => { setTimeout(resolve, 10); });
-        }
-
-        secondPromises.push(
-          this.makeRequest().then((result) => ({ ...result, requestIndex })),
-        );
-      }
-
-      // eslint-disable-next-line no-await-in-loop
-      const secondResults = await Promise.all(secondPromises);
-      results.push(...secondResults);
-
-      // Update stats
-      secondResults.forEach((result) => {
-        this.stats.total += 1;
-        if (result.statusCode === 200) {
-          this.stats.successful += 1;
-        } else if (result.statusCode === 429) {
-          this.stats.blocked += 1;
-        } else {
-          this.stats.errors += 1;
-        }
+    res.on('end', () => {
+      resolve({
+        statusCode: res.statusCode,
+        duration: Date.now() - startTime,
+        data,
+        success: res.statusCode === 200,
       });
+    });
+  });
 
-      // Log progress for this second
-      const secondStats = secondResults.reduce((acc, result) => {
-        if (result.statusCode === 200) acc.successful += 1;
-        else if (result.statusCode === 429) acc.blocked += 1;
-        else acc.errors += 1;
-        return acc;
-      }, { successful: 0, blocked: 0, errors: 0 });
+  req.on('error', (error) => {
+    resolve({
+      statusCode: 0,
+      duration: Date.now() - startTime,
+      error: error.message,
+      success: false,
+    });
+  });
 
-      console.log(`   ✅ ${secondStats.successful} successful, 🚫 ${secondStats.blocked} blocked, ❌ ${secondStats.errors} errors`);
+  req.on('timeout', () => {
+    req.destroy();
+    resolve({
+      statusCode: 0,
+      duration: Date.now() - startTime,
+      error: 'Timeout',
+      success: false,
+    });
+  });
 
-      // Wait for next second if not the last iteration
-      if (second < durationSeconds - 1) {
-        // eslint-disable-next-line no-await-in-loop
-        await new Promise((resolve) => { setTimeout(resolve, 1000); });
-      }
+  req.end();
+});
+
+/**
+ * Execute requests with batching
+ */
+const executeRequestsWithBatching = async (
+  totalRequests,
+  batchSize,
+  batchDelay,
+  requestFn,
+) => {
+  const promises = [];
+
+  for (let i = 0; i < totalRequests; i += 1) {
+    // Add small delay between batches
+    if (i % batchSize === 0 && i > 0) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => {
+        setTimeout(resolve, batchDelay);
+      });
     }
 
-    this.printFinalReport();
-    return this.stats;
+    promises.push(
+      requestFn().then((result) => ({ ...result, requestIndex: i + 1 })),
+    );
   }
 
-  printFinalReport() {
-    console.log('\n📈 ===== FINAL TEST RESULTS =====');
-    console.log(`✅ Successful Requests: ${this.stats.successful}`);
-    console.log(`🚫 Rate Limited (429): ${this.stats.blocked}`);
-    console.log(`❌ Other Errors: ${this.stats.errors}`);
-    console.log(`📊 Total Requests: ${this.stats.total}`);
-    console.log(`🎯 Success Rate: ${((this.stats.successful / this.stats.total) * 100).toFixed(2)}%`);
+  return Promise.all(promises);
+};
 
-    // Rate limiter validation
-    const expectedMaxSuccess = 200 * 5; // 200/sec for 5 seconds
-    if (this.stats.successful <= expectedMaxSuccess && this.stats.blocked > 0) {
-      console.log('🎉 Rate limiter is working correctly!');
-    } else {
-      console.log('⚠️  Rate limiter may not be working as expected');
+/**
+ * Log second progress
+ */
+const logSecondProgress = (second, stats) => {
+  console.log(`   ✅ ${stats.successful} successful, 🚫 ${stats.blocked} blocked, ❌ ${stats.errors} errors`);
+};
+
+/**
+ * Print test header
+ */
+const printTestHeader = (config) => {
+  console.log('🚀 Starting rate limiter test...');
+  console.log(`📊 Target: ${config.requestsPerSecond} requests/second for ${config.durationSeconds} seconds\n`);
+};
+
+/**
+ * Print final report
+ */
+const printFinalReport = (stats, _durationSeconds) => {
+  console.log('\n📈 ===== FINAL TEST RESULTS =====');
+  console.log(`✅ Successful Requests: ${stats.successful}`);
+  console.log(`🚫 Rate Limited (429): ${stats.blocked}`);
+  console.log(`❌ Other Errors: ${stats.errors}`);
+  console.log(`📊 Total Requests: ${stats.total}`);
+  console.log(`🎯 Success Rate: ${calculateSuccessRate(stats.successful, stats.total)}%`);
+
+  // Validate rate limiter effectiveness
+  if (stats.blocked > 0) {
+    console.log('🎉 Rate limiter is working correctly!');
+  } else {
+    console.log('⚠️  Rate limiter may not be working as expected');
+  }
+};
+
+/**
+ * Run rate limiter test
+ */
+const runRateLimiterTest = async (config) => {
+  printTestHeader(config);
+
+  let stats = createEmptyStats();
+
+  // eslint-disable-next-line no-plusplus
+  for (let second = 0; second < config.durationSeconds; second++) {
+    console.log(`\n⏰ Second ${second + 1}: Sending ${config.requestsPerSecond} requests...`);
+
+    // Create request function
+    const requestFn = () => makeRequest(config.baseUrl, config.endpoint, config.timeout);
+
+    // Execute requests with batching
+    // eslint-disable-next-line no-await-in-loop
+    const results = await executeRequestsWithBatching(
+      config.requestsPerSecond,
+      config.batchSize,
+      config.batchDelay,
+      requestFn,
+    );
+
+    // Update statistics
+    const updatedStats = results.reduce(
+      (acc, result) => updateStats(acc, result),
+      stats,
+    );
+    const secondStats = results.reduce(
+      (acc, result) => updateStats(acc, result),
+      createEmptyStats(),
+    );
+    stats = updatedStats;
+
+    // Log progress
+    logSecondProgress(second + 1, secondStats);
+
+    // Wait for next second if not last iteration
+    if (second < config.durationSeconds - 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1000);
+      });
     }
   }
-}
 
-// Run the test if this file is executed directly
-if (require.main === module) {
+  printFinalReport(stats, config.durationSeconds);
+
+  return stats;
+};
+
+/**
+ * Parse command line arguments
+ */
+const parseArguments = () => {
   const args = process.argv.slice(2);
-  let baseUrl = 'http://localhost:8000';
-  let rps = 250; // Requests per second
-  let duration = 5; // Duration in seconds
+  const config = { ...DEFAULT_CONFIG };
 
-  // Parse arguments
   const baseUrlIndex = args.indexOf('--base-url');
   if (baseUrlIndex !== -1 && args[baseUrlIndex + 1]) {
-    baseUrl = args[baseUrlIndex + 1];
-    console.log(`Using Base URL: ${baseUrl}`);
+    config.baseUrl = args[baseUrlIndex + 1];
   }
 
   const rpsIndex = args.indexOf('--rps');
   if (rpsIndex !== -1 && args[rpsIndex + 1]) {
-    rps = parseInt(args[rpsIndex + 1], 10);
+    config.requestsPerSecond = parseInt(args[rpsIndex + 1], 10);
   }
 
   const durationIndex = args.indexOf('--duration');
   if (durationIndex !== -1 && args[durationIndex + 1]) {
-    duration = parseInt(args[durationIndex + 1], 10);
+    config.durationSeconds = parseInt(args[durationIndex + 1], 10);
   }
 
-  const tester = new RateLimiterTester(baseUrl);
-  tester.testRateLimit(rps, duration).catch(console.error);
+  return config;
+};
+
+/**
+ * Main test runner
+ */
+const runTest = async () => {
+  try {
+    const config = parseArguments();
+    await runRateLimiterTest(config);
+    process.exit(0);
+  } catch (error) {
+    console.error('❌ Test failed:', error.message);
+    process.exit(1);
+  }
+};
+
+// Run test if executed directly
+if (require.main === module) {
+  runTest();
 }
 
-module.exports = RateLimiterTester;
+/**
+ * Export for testing
+ */
+module.exports = {
+  runRateLimiterTest,
+  makeRequest,
+  createEmptyStats,
+  updateStats,
+  calculateSuccessRate,
+  DEFAULT_CONFIG,
+};

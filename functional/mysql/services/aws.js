@@ -1,3 +1,8 @@
+/**
+ * AWS S3 Service
+ * Handles file uploads, deletions, and presigned URLs for AWS S3
+ */
+
 const path = require('path');
 const fs = require('fs');
 const moment = require('moment-timezone');
@@ -10,10 +15,9 @@ const {
 } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
-/** Custom Require * */
 const response = require('../helpers/v1/response.helpers');
 
-// Created AWS S3 instance
+// AWS S3 Client instance
 const s3 = new S3Client({
   region: process.env.AWS_REGION,
   credentials: {
@@ -24,7 +28,9 @@ const s3 = new S3Client({
 
 const bucketName = process.env.AWS_S3_BUCKET_NAME;
 
-// Upload a single file to AWS S3 after storing locally
+/**
+ * Upload file to AWS S3 (middleware)
+ */
 const uploadFile = async (req, res, next) => {
   console.log('AWSService@uploadFile');
 
@@ -39,6 +45,7 @@ const uploadFile = async (req, res, next) => {
     const uploadDirectory = `${dateObj.getFullYear()}/${dateObj.getMonth() + 1}/${dateObj.getDate()}`;
     let fileName = `${file.fieldname}-${uuidv4()}-${moment().unix()}${path.extname(file.originalname)}`;
     let contentType = file.mimetype;
+
     // eslint-disable-next-line security/detect-non-literal-fs-filename
     let fileBuffer = await fs.promises.readFile(file.path);
 
@@ -61,7 +68,7 @@ const uploadFile = async (req, res, next) => {
       Bucket: bucketName,
       Key: key,
       Body: fileBuffer,
-      ACL: 'public-read',
+      // ACL: 'public-read',
       ContentType: contentType,
     };
 
@@ -76,6 +83,7 @@ const uploadFile = async (req, res, next) => {
     req.image_url = fileUrl;
 
     // Delete file after uploading to S3
+    // Delete file after uploading to S3
     // eslint-disable-next-line security/detect-non-literal-fs-filename
     if (fs.existsSync(file.path)) {
       // eslint-disable-next-line security/detect-non-literal-fs-filename
@@ -89,6 +97,9 @@ const uploadFile = async (req, res, next) => {
   }
 };
 
+/**
+ * Delete file from AWS S3
+ */
 const deleteFile = async (fileUrl) => {
   console.log('AWSService@deleteFile');
 
@@ -106,10 +117,14 @@ const deleteFile = async (fileUrl) => {
 
     return true;
   } catch (err) {
+    console.log('AWSService@deleteFile Error:', err.message);
     return false;
   }
 };
 
+/**
+ * Generate presigned URL for direct upload to S3
+ */
 const getPresignedUrl = async (folder, fileName, fileType, expiry = 5 * 60) => {
   console.log('AWSService@getPresignedUrl');
   try {
@@ -145,9 +160,26 @@ const getPresignedUrl = async (folder, fileName, fileType, expiry = 5 * 60) => {
   }
 };
 
+/**
+ * Cleanup AWS resources
+ */
+const cleanup = async () => {
+  console.log('AWSService@cleanup');
+  try {
+    // AWS SDK v3 doesn't maintain persistent connections
+    // S3Client is stateless and doesn't require cleanup
+    console.log('✅ AWS cleanup completed');
+    return true;
+  } catch (error) {
+    console.error('AWSService@cleanup Error:', error);
+    return false;
+  }
+};
+
 // Export all functions
 module.exports = {
   uploadFile,
   deleteFile,
   getPresignedUrl,
+  cleanup,
 };

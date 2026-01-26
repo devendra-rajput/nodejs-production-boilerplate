@@ -1,72 +1,214 @@
+/**
+ * User Routes
+ * Defines all user-related API endpoints
+ */
+
 const express = require('express');
-
-const routes = express.Router();
-
-/** Controllers * */
 const userController = require('../resources/v1/users/users.controller');
-
-/** Resources * */
-const userResources = require('../resources/v1/users/users.resources');
-
-/** Validations * */
+const UserModel = require('../resources/v1/users/user.model');
 const userValidation = require('../resources/v1/users/users.validation');
-
-/** Middleware * */
-const authMiddleware = require('../middleware/v1/authorize');
-
-/** Utility file */
+const { auth } = require('../middleware/v1/authorize');
 const uploadUtils = require('../utils/upload');
 const aws = require('../services/aws');
 
-const dateObj = new Date();
-const uploadDirectory = `uploads/${dateObj.getFullYear()}/${dateObj.getMonth() + 1}/${dateObj.getDate()}`;
-const validFileExtenstions = /jpg|jpeg|png|heic/;
-const maxFileSize = 5 * 1024 * 1024; // 5 MB
+/**
+ * Upload configuration constants
+ */
+const UPLOAD_CONFIG = {
+  validExtensions: /jpg|jpeg|png|heic/,
+  maxFileSize: 5 * 1024 * 1024, // 5 MB
+  maxBulkFiles: 5,
+};
 
-/** Routes * */
-routes.post('/create', [uploadUtils.uploadFile(validFileExtenstions, maxFileSize, uploadDirectory).single('image'), userValidation.createOne], userController.createOne);
-routes.post('/resend-otp', [userValidation.resendOtp], userController.resendOtp);
-routes.post('/verify', [userValidation.verifyOtp], userController.verifyOtp);
-routes.post('/login', [userValidation.userLogin], userController.userLogin);
-routes.post('/change-password', [authMiddleware.auth(), userValidation.changePassword], userController.changePassword);
-routes.post('/forgot-password', [userValidation.forgotPassword], userController.forgotPassword);
-routes.post('/forgot-password/verify-otp', [userValidation.verifyForgotPasswordOTP], userController.verifyForgotPasswordOTP);
-routes.post('/reset-password', [userValidation.resetPassword], userController.resetPassword);
-routes.get('/profile', [authMiddleware.auth()], userController.getUserProfile);
-routes.get('/', [authMiddleware.auth(userResources.roles.ADMIN)], userController.getAllWithPagination);
-routes.get('/logout', [authMiddleware.auth()], userController.logout);
-routes.delete('/', [authMiddleware.auth()], userController.deleteOne);
+/**
+ * Get upload directory path
+ */
+const getUploadDirectory = () => {
+  const date = new Date();
+  return `uploads/${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
+};
 
-routes.post(
-  '/upload-image',
-  [
-    authMiddleware.auth(),
-    uploadUtils.uploadFile(validFileExtenstions, maxFileSize, uploadDirectory).single('image'),
-  ],
-  userController.uploadImage,
-);
+/**
+ * Create file upload middleware
+ * Higher-order function that creates upload middleware
+ */
+const createUploadMiddleware = (directory, fieldName = 'image', isMultiple = false) => {
+  const upload = uploadUtils.uploadFile(
+    UPLOAD_CONFIG.validExtensions,
+    UPLOAD_CONFIG.maxFileSize,
+    directory,
+  );
 
-routes.post(
-  '/upload-bulk-images',
-  [
-    authMiddleware.auth(),
-    uploadUtils.setMaxFileLimit(5), // To return the valid images count in error
-    uploadUtils.uploadFile(validFileExtenstions, maxFileSize, uploadDirectory).array('images', 5),
-  ],
-  userController.uploadBulkImages,
-);
-routes.post('/delete-image', [userValidation.deleteImage], userController.deleteImage);
+  return isMultiple
+    ? upload.array(fieldName, UPLOAD_CONFIG.maxBulkFiles)
+    : upload.single(fieldName);
+};
 
-routes.post(
-  '/upload-image-aws',
-  [
-    authMiddleware.auth(),
-    uploadUtils.uploadFile(validFileExtenstions, maxFileSize, 'uploads/temp').single('image'),
-    aws.uploadFile,
-  ],
-  userController.uploadImageAWS,
-);
-routes.post('/delete-image-aws', [userValidation.deleteImageAWS], userController.deleteImageAWS);
-routes.post('/generate-aws-presigned-url', [authMiddleware.auth(), userValidation.generatePresignedUrl], userController.generatePresignedUrl);
+// Authentication routes (public)
+const createAuthRoutes = (router) => {
+  router.post(
+    '/create',
+    [
+      createUploadMiddleware(getUploadDirectory()),
+      userValidation.createOne,
+    ],
+    userController.createOne,
+  );
 
-module.exports = routes;
+  router.post(
+    '/resend-otp',
+    [userValidation.resendOtp],
+    userController.resendOtp,
+  );
+
+  router.post(
+    '/verify',
+    [userValidation.verifyOtp],
+    userController.verifyOtp,
+  );
+
+  router.post(
+    '/login',
+    [userValidation.userLogin],
+    userController.userLogin,
+  );
+
+  router.post(
+    '/forgot-password',
+    [userValidation.forgotPassword],
+    userController.forgotPassword,
+  );
+
+  router.post(
+    '/forgot-password/verify-otp',
+    [userValidation.verifyForgotPasswordOTP],
+    userController.verifyForgotPasswordOTP,
+  );
+
+  router.post(
+    '/reset-password',
+    [userValidation.resetPassword],
+    userController.resetPassword,
+  );
+
+  return router;
+};
+
+// Protected user routes
+const createProtectedUserRoutes = (router) => {
+  router.get(
+    '/profile',
+    [auth()],
+    userController.getUserProfile,
+  );
+
+  router.post(
+    '/change-password',
+    [auth(), userValidation.changePassword],
+    userController.changePassword,
+  );
+
+  router.get(
+    '/logout',
+    [auth()],
+    userController.logout,
+  );
+
+  router.delete(
+    '/',
+    [auth()],
+    userController.deleteOne,
+  );
+
+  return router;
+};
+
+// Image upload routes
+const createImageUploadRoutes = (router) => {
+  const uploadDir = getUploadDirectory();
+
+  router.post(
+    '/upload-image',
+    [
+      auth(),
+      createUploadMiddleware(uploadDir),
+    ],
+    userController.uploadImage,
+  );
+
+  router.post(
+    '/upload-bulk-images',
+    [
+      auth(),
+      uploadUtils.setMaxFileLimit(UPLOAD_CONFIG.maxBulkFiles),
+      createUploadMiddleware(uploadDir, 'images', true),
+    ],
+    userController.uploadBulkImages,
+  );
+
+  router.post(
+    '/delete-image',
+    [userValidation.deleteImage],
+    userController.deleteImage,
+  );
+
+  return router;
+};
+
+// AWS S3 upload routes
+const createAWSUploadRoutes = (router) => {
+  router.post(
+    '/upload-image-aws',
+    [
+      auth(),
+      createUploadMiddleware('uploads/temp'),
+      aws.uploadFile,
+    ],
+    userController.uploadImageAWS,
+  );
+
+  router.post(
+    '/delete-image-aws',
+    [userValidation.deleteImageAWS],
+    userController.deleteImageAWS,
+  );
+
+  router.post(
+    '/generate-aws-presigned-url',
+    [auth(), userValidation.generatePresignedUrl],
+    userController.generatePresignedUrl,
+  );
+
+  return router;
+};
+
+// Admin routes
+const createAdminRoutes = (router) => {
+  router.get(
+    '/',
+    [auth(UserModel.roles.ADMIN)],
+    userController.getAllWithPagination,
+  );
+
+  return router;
+};
+
+/**
+ * Initialize all user routes
+ */
+const initializeUserRoutes = () => {
+  const router = express.Router();
+
+  createAuthRoutes(router);
+  createProtectedUserRoutes(router);
+  createImageUploadRoutes(router);
+  createAWSUploadRoutes(router);
+  createAdminRoutes(router);
+
+  return router;
+};
+
+/**
+ * Export configured router
+ */
+module.exports = initializeUserRoutes();

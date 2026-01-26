@@ -1,233 +1,189 @@
-/** Custom Require * */
-const User = require('./user.schema');
-const dataHelper = require('../../../helpers/v1/data.helpers');
-const redis = require('../../../services/redis');
+/**
+ * User Model
+ * Data access layer for user operations
+ */
 
-const IN_ACTIVE = '0';
-const ACTIVE = '1';
-const BLOCKED = '2';
-const DELETED = '3';
-const statuses = Object.freeze({
-  IN_ACTIVE,
-  ACTIVE,
-  BLOCKED,
-  DELETED,
-});
+const { User, USER_STATUS, USER_ROLES } = require('./user.schema');
 
-const USER = 'user';
-const ADMIN = 'admin';
-const roles = Object.freeze({
-  USER,
-  ADMIN,
+// Lazy load dependencies only when needed
+// eslint-disable-next-line global-require
+const getDataHelper = () => require('../../../helpers/v1/data.helpers');
+// eslint-disable-next-line global-require
+const getRedisService = () => require('../../../services/redis');
+
+/**
+ * Common query conditions
+ */
+const COMMON_QUERIES = Object.freeze({
+  notDeleted: {
+    deleted_at: { $in: [null, '', ' '] },
+  },
+  caseInsensitive: {
+    locale: 'en',
+    strength: 2,
+  },
 });
 
 /**
- * @swagger
- * components:
- *   schemas:
- *     User:
- *       type: object
- *       required:
- *         - email
- *         - password
- *       properties:
- *         id:
- *           type: string
- *           description: The auto-generated id of the user
- *         email:
- *           type: string
- *           description: The email of the user
- *         password:
- *           type: string
- *           description: The password of the user (hashed, stored securely)
- *         first_name:
- *           type: string
- *           description: The first name of the user
- *         last_name:
- *           type: string
- *           description: The last name of the user
- *         phone_code:
- *           type: string
- *           description: The phone code (e.g., country code)
- *         phone_number:
- *           type: string
- *           description: The phone number of the user
- *         profile_picture:
- *           type: string
- *           description: The URL or path to the user's profile picture
- *         status:
- *           type: string
- *           enum: ['0', '1', '2', '3']
- *           description: >
- *             The current status of the user
- *             (0 => In-active, 1 => Active, 2 => Blocked, 3 => Deleted)
- *         role:
- *           type: string
- *           enum: ['user', 'admin']
- *           description: The role of the user (user or admin)
- *         is_email_verified:
- *           type: boolean
- *           description: Whether the user's email has been verified
- *         deleted_at:
- *           type: string
- *           description: The date and time when the user was deleted (if applicable)
- *         created_at:
- *           type: string
- *           format: date-time
- *           description: The date and time when the user was created
- *         updated_at:
- *           type: string
- *           format: date-time
- *           description: The date and time when the user was last updated
+ * Cache key prefixes
  */
+const CACHE_KEYS = Object.freeze({
+  usersList: 'users:list:',
+});
 
 /**
- * @swagger
- * tags:
- *   name: Users
- *   description: The users managing API
+ * Create query for non-deleted records
  */
+const createNotDeletedQuery = (additionalQuery = {}) => ({
+  ...COMMON_QUERIES.notDeleted,
+  ...additionalQuery,
+});
 
+/**
+ * Invalidate user list cache
+ */
+const invalidateUserListCache = async () => {
+  const redis = getRedisService();
+  const keys = await redis.getAllSpecificKeys(CACHE_KEYS.usersList);
+
+  if (keys && keys.length > 0) {
+    await Promise.all(keys.map((key) => redis.clearKey(key)));
+  }
+};
+
+/**
+ * Create a new user
+ */
 const createOne = async (data) => {
-  console.log('UsersModel@createOne');
-
   try {
-    if (!data || data === '') {
+    if (!data) {
       throw new Error('Data is required');
     }
 
-    // Insert the user data
     const user = await User.create(data);
     if (!user) {
       return false;
     }
 
-    // Invalidate cache
-    const keys = await redis.getAllSpecificKeys('users:list:');
-    if (keys) {
-      await Promise.all(keys.map((key) => redis.clearKey(key)));
-    }
+    // Invalidate cache asynchronously (fire and forget)
+    invalidateUserListCache().catch(() => { });
 
     return user;
   } catch (error) {
-    console.log('Error UserModel@createOne: ', error);
+    console.error('UserModel@createOne Error:', error.message);
     return false;
   }
 };
 
-const getOneByColumnNameAndValue = async (columnName, columnValue) => {
-  console.log('UsersModel@getOneByColumnNameAndValue');
-
+/**
+ * Get user by column name and value
+ */
+const getOneByColumnNameAndValue = async (columnName, columnValue, includeSensitive = false) => {
   try {
-    const result = await User.findOne({
-      [columnName]: columnValue,
-      deleted_at: {
-        $in: [null, '', ' '],
-      }, // Check for null, empty string, or space
-    })
-      .collation({ locale: 'en', strength: 2 });
-    if (!result) {
-      return false;
+    const query = createNotDeletedQuery({ [columnName]: columnValue });
+
+    let queryBuilder = User.findOne(query).collation(COMMON_QUERIES.caseInsensitive);
+
+    // Include sensitive fields if requested
+    if (includeSensitive) {
+      queryBuilder = queryBuilder.select('+password +tokens.auth_token +otp.email_verification +otp.forgot_password');
     }
 
-    return result;
+    const result = await queryBuilder.lean({ virtuals: true });
+
+    return result || false;
   } catch (error) {
-    console.log('Error UserModel@getOneByColumnNameAndValue: ', error);
+    console.error('UserModel@getOneByColumnNameAndValue Error:', error.message);
     return false;
   }
 };
 
-const getOneByPhoneCodeAndNumber = async (phoneCode, phoneNumber) => {
-  console.log('UsersModel@getOneByPhoneCodeAndNumber');
-
+/**
+ * Get user by phone code and number
+ */
+const getOneByPhoneCodeAndNumber = async (phoneCode, phoneNumber, includeSensitive) => {
   try {
-    const result = await User.findOne({
-      phone_code: phoneCode,
-      phone_number: phoneNumber,
-      deleted_at: {
-        $in: [null, '', ' '],
-      }, // Check for null, empty string, or space
-    })
-      .collation({ locale: 'en', strength: 2 });
-    if (!result) {
-      return false;
+    let queryBuilder = User.findOne().byPhone(phoneCode, phoneNumber)
+      .collation(COMMON_QUERIES.caseInsensitive);
+
+    // Include sensitive fields if requested
+    if (includeSensitive) {
+      queryBuilder = queryBuilder.select('+password +tokens.auth_token +otp.email_verification +otp.forgot_password');
     }
 
-    return result;
+    const result = await queryBuilder.lean();
+
+    return result || false;
   } catch (error) {
-    console.log('Error UserModel@getOneByPhoneCodeAndNumber: ', error);
+    console.error('UserModel@getOneByPhoneCodeAndNumber Error:', error.message);
     return false;
   }
 };
 
+/**
+ * Check if user exists
+ */
 const isUserExist = async (columnName, columnValue, userId = false) => {
-  console.log('UsersModel@isUserExist');
-
   try {
-    let query = {
-      [columnName]: columnValue,
-      deleted_at: {
-        $in: [null, '', ' '],
-      }, // Check for null, empty string, or space
-    };
+    const query = createNotDeletedQuery({ [columnName]: columnValue });
 
     if (userId) {
-      query = {
-        ...query,
-        _id: {
-          $ne: userId,
-        },
-      };
-    }
-    const usersCount = await User.countDocuments(query).collation({ locale: 'en', strength: 2 });
-    if (!usersCount || usersCount <= 0) {
-      return false;
+      query._id = { $ne: userId };
     }
 
-    return true;
+    const count = await User.countDocuments(query)
+      .collation(COMMON_QUERIES.caseInsensitive);
+
+    return count > 0;
   } catch (error) {
-    console.log('Error UserModel@isUserExist: ', error);
+    console.error('UserModel@isUserExist Error:', error.message);
     return false;
   }
 };
 
+/**
+ * Update user by ID
+ */
 const updateOne = async (id, data) => {
-  console.log('UsersModel@updateOne');
-
   try {
-    if ((!id || id === '') || (!data || data === '')) {
-      throw new Error('data is required');
+    if (!id || !data) {
+      throw new Error('ID and data are required');
     }
 
-    const user = await User.findByIdAndUpdate(id, data, { new: true });
+    const user = await User.findByIdAndUpdate(id, data, {
+      new: true,
+      lean: true, // Return plain JavaScript object
+    });
+
     if (!user) {
       return false;
     }
 
-    // Invalidate cache
-    const keys = await redis.getAllSpecificKeys('users:list:');
-    if (keys) {
-      await Promise.all(keys.map((key) => redis.clearKey(key)));
-    }
+    // Invalidate cache asynchronously
+    invalidateUserListCache().catch(() => { });
 
     return user;
   } catch (error) {
-    console.log('Error UserModel@updateOne: ', error);
+    console.error('UserModel@updateOne Error:', error.message);
     return false;
   }
 };
 
-const getFormattedData = async (userObj = null) => {
-  console.log('UsersModel@getFormattedData');
-
-  if (!userObj || userObj === '') {
+/**
+ * Format user data for response
+ */
+const getFormattedData = (userObj) => {
+  if (!userObj) {
     throw new Error('userObj is required');
   }
 
-  const result = {
+  const dataHelper = getDataHelper();
+
+  return {
     id: userObj._id,
     first_name: userObj?.user_info?.first_name || null,
     last_name: userObj?.user_info?.last_name || null,
+    full_name: userObj?.full_name || null,
     email: userObj.email,
     role: userObj.role,
     status: userObj.status,
@@ -239,110 +195,109 @@ const getFormattedData = async (userObj = null) => {
     updated_at: dataHelper.convertDateTimezoneAndFormat(userObj.updated_at),
     deleted_at: userObj.deleted_at,
   };
-
-  return result;
 };
 
+/**
+ * Delete user by ID
+ */
 const deleteOne = async (id) => {
-  console.log('UsersModel@deleteOne');
-
   try {
     const result = await User.deleteOne({ _id: id });
-    if (!result) {
+
+    if (!result || result.deletedCount === 0) {
       return false;
     }
 
-    // Invalidate cache
-    const keys = await redis.getAllSpecificKeys('users:list:');
-    if (keys) {
-      await Promise.all(keys.map((key) => redis.clearKey(key)));
-    }
+    // Invalidate cache asynchronously
+    invalidateUserListCache().catch(() => { });
 
     return result;
   } catch (error) {
-    console.log('Error UserModel@deleteOne: ', error);
+    console.error('UserModel@deleteOne Error:', error.message);
     return false;
   }
 };
 
+/**
+ * Get all users with pagination
+ */
 const getAllWithPagination = async (page, limit, filterObj = {}) => {
-  console.log('UsersResources@getAllWithPagination');
-
   try {
-    const cacheKey = `users:list:page:${page}:limit:${limit}:role:${filterObj?.role || 'all'}`;
-    const cachedData = await redis.getKey(cacheKey);
+    const redis = getRedisService();
+    const dataHelper = getDataHelper();
 
+    // Create cache key
+    const cacheKey = `${CACHE_KEYS.usersList}page:${page}:limit:${limit}:role:${filterObj?.role || 'all'}`;
+
+    // Try to get from cache
+    const cachedData = await redis.getKey(cacheKey);
     if (cachedData) {
       return cachedData;
     }
 
-    let resObj;
-    let dbQuery = {
-      deleted_at: {
-        $in: [null, '', ' '],
-      }, // Check for null, empty string, or space
-    };
+    // Build query
+    const query = createNotDeletedQuery(
+      filterObj?.role ? { role: filterObj.role } : {},
+    );
 
-    if (filterObj?.role) {
-      dbQuery = {
-        ...dbQuery,
-        role: filterObj.role,
-      };
-    }
+    // Get total count (optimized with hint if index exists)
+    const totalRecords = await User.countDocuments(query);
 
-    const totalRecords = await User.countDocuments(dbQuery);
+    // Calculate pagination
+    const pagination = dataHelper.calculatePagination(totalRecords, page, limit);
 
-    const pagination = await dataHelper.calculatePagination(totalRecords, page, limit);
-
+    // Fetch users with projection to exclude sensitive fields
     const users = await User.aggregate([
-      { $match: dbQuery },
+      { $match: query },
       {
         $project: {
           password: 0,
-          auth_token: 0,
-          fcm_token: 0,
+          'tokens.auth_token': 0,
+          'tokens.fcm_token': 0,
         },
       },
-    ])
-      .sort({ createdAt: -1 })
-      .skip(pagination.offset)
-      .limit(pagination.limit);
+      { $sort: { createdAt: -1 } },
+      { $skip: pagination.offset },
+      { $limit: pagination.limit },
+    ]);
 
-    if (!users) {
-      resObj = {
-        data: [],
-      };
-    } else {
-      resObj = {
-        data: users,
-        pagination: {
-          total: totalRecords,
-          current_page: pagination.currentPage,
-          total_pages: pagination.totalPages,
-          per_page: pagination.limit,
-        },
-      };
-    }
+    const result = {
+      data: users || [],
+      pagination: {
+        total: totalRecords,
+        current_page: pagination.currentPage,
+        total_pages: pagination.totalPages,
+        per_page: pagination.limit,
+      },
+    };
 
-    // Cache the result
-    await redis.setKey(cacheKey, resObj);
+    // Cache the result asynchronously
+    redis.setKey(cacheKey, result).catch(() => { });
 
-    return resObj;
+    return result;
   } catch (error) {
-    console.log('Error UserModel@getAllWithPagination: ', error);
+    console.error('UserModel@getAllWithPagination Error:', error.message);
     return false;
   }
 };
 
+/**
+ * Export user model functions
+ */
 module.exports = {
+  // CRUD operations
   createOne,
   getOneByColumnNameAndValue,
   getOneByPhoneCodeAndNumber,
   isUserExist,
   updateOne,
-  getFormattedData,
   deleteOne,
   getAllWithPagination,
-  statuses,
-  roles,
+
+  // Utility functions
+  getFormattedData,
+
+  // Constants
+  statuses: USER_STATUS,
+  roles: USER_ROLES,
 };

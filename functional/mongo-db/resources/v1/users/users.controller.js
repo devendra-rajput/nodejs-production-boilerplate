@@ -1,22 +1,94 @@
+/**
+ * User Controller
+ * Handles HTTP requests for user operations
+ */
+
 const path = require('path');
 const fs = require('fs');
 
-/** Custom Require * */
 const response = require('../../../helpers/v1/response.helpers');
 const dataHelper = require('../../../helpers/v1/data.helpers');
-const nodemailer = require('../../../services/nodemailer');
 const UserModel = require('./users.model');
-const aws = require('../../../services/aws');
-const socketService = require('../../../services/socket');
-const socketEvents = require('../../../constants/socket_events');
 
-const verificationTemplate = require('../../../emailTemplates/v1/verification');
-const forgotPasswordTemplate = require('../../../emailTemplates/v1/forgotPassword');
+// Lazy load dependencies
+// eslint-disable-next-line global-require
+const getNodemailer = () => require('../../../services/nodemailer');
+// eslint-disable-next-line global-require
+const getAWS = () => require('../../../services/aws');
+// eslint-disable-next-line global-require
+const getSocketService = () => require('../../../services/socket');
+// eslint-disable-next-line global-require
+const getSocketEvents = () => require('../../../constants/socket_events');
 
+// Lazy load email templates
+// eslint-disable-next-line global-require
+const getVerificationTemplate = () => require('../../../emailTemplates/v1/verification');
+// eslint-disable-next-line global-require
+const getForgotPasswordTemplate = () => require('../../../emailTemplates/v1/forgotPassword');
+
+/**
+ * Helper Functions
+ */
+
+/**
+ * Convert file path to public URL
+ */
+const filePathToURL = (req, filePath) => {
+  const normalizedPath = filePath.replace(/\\/g, '/');
+  return `${req.protocol}://${req.get('host')}/${normalizedPath}`;
+};
+
+/**
+ * Delete local file
+ * @param {string} fileUrl - File URL to delete
+ * @returns {boolean} True if deleted
+ */
+const deleteLocalFile = (fileUrl) => {
+  try {
+    const filePath = new URL(fileUrl).pathname;
+    const localPath = path.join(process.cwd(), filePath);
+
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
+    if (fs.existsSync(localPath)) {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename
+      fs.unlinkSync(localPath);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error('Error deleting file:', error.message);
+    return false;
+  }
+};
+
+/**
+ * Send email asynchronously (fire and forget)
+ * @param {string} email - Recipient email
+ * @param {string} subject - Email subject
+ * @param {string} html - Email HTML content
+ */
+const sendEmailAsync = (email, subject, html) => {
+  const nodemailer = getNodemailer();
+  nodemailer.sendMail(email, subject, html).catch((error) => {
+    console.error('Error sending email:', error.message);
+  });
+};
+
+/**
+ * Get success message with OTP (development only)
+ */
+const getOTPMessage = (res, otp) => (process.env.NODE_ENV === 'development'
+  ? res.__('auth.emailCodeSentWithOtp', { code: otp })
+  : res.__('auth.emailCodeSent'));
+
+/**
+ * Controller Functions
+ */
+
+/**
+ * Create new user
+ */
 const createOne = async (req, res) => {
-  console.log('UsersController@createOne');
-
-  /* Collect the user input  */
   const {
     first_name,
     last_name,
@@ -26,96 +98,53 @@ const createOne = async (req, res) => {
     phone_code,
   } = req.body;
 
-  /** Check that the user already exist or not with the provided email */
+  // Check if user exists
   const isUserExist = await UserModel.isUserExist('email', email);
   if (isUserExist) {
     return response.conflict('error.emailExist', res, false);
   }
 
-  /* Convert password string into a hash  */
-  const hashedPassword = await dataHelper.hashPassword(password);
+  // Hash password and generate OTP
+  const [hashedPassword, emailVerificationOtp] = await Promise.all([
+    dataHelper.hashPassword(password),
+    dataHelper.generateSecureOTP(6),
+  ]);
 
-  /* Generate OTP to verify the user email  */
-  const emailVerificationOtp = await dataHelper.generateSecureOTP(6);
-
-  /* Formated the data to insert in DB */
-  let userData = {
+  // Build user data
+  const userData = {
     email,
     password: hashedPassword,
-    user_info: {
-      first_name,
-      last_name,
-    },
-    otp: {
-      email_verification: emailVerificationOtp,
-    },
+    user_info: { first_name, last_name },
+    otp: { email_verification: emailVerificationOtp },
+    ...(phone_code && phone_number && { phone_code, phone_number }),
+    ...(req?.file?.path && { profile_picture: filePathToURL(req, req.file.path) }),
   };
 
-  if (phone_code && phone_number) {
-    userData = {
-      ...userData,
-      phone_code,
-      phone_number,
-    };
-  }
-
-  if (req?.file?.path) {
-    /** Convert file path into a public URL */
-    const filePath = req.file.path.replace(/\\/g, '/');
-    const fileUrl = `${req.protocol}://${req.get('host')}/${filePath}`;
-    userData = {
-      ...userData,
-      profile_picture: fileUrl,
-    };
-  }
-
-  /* Insert the data into DB */
+  // Create user
   const hasCreated = await UserModel.createOne(userData);
   if (!hasCreated) {
-    /** If unable to create user then delete the uploaded file */
-    if (userData?.profile_picture) {
-      // e.g., /uploads/images/filename.jpg
-      const filePath = new URL(userData.profile_picture).pathname;
-      // adjust path as needed. process.cwd() returns root directory
-      const localPath = path.join(process.cwd(), filePath);
-
-      // eslint-disable-next-line security/detect-non-literal-fs-filename
-      if (fs.existsSync(localPath)) {
-        // eslint-disable-next-line security/detect-non-literal-fs-filename
-        fs.unlinkSync(localPath);
-      }
+    // Cleanup uploaded file if user creation failed
+    if (userData.profile_picture) {
+      deleteLocalFile(userData.profile_picture);
     }
-
     return response.exception('error.serverError', res, false);
   }
 
-  /** Send verification email */
-  try {
-    const subject = 'Account Verification';
-    const html = await verificationTemplate(emailVerificationOtp);
-    nodemailer.sendMail(email, subject, html);
-  } catch (error) {
-    console.log('Error while sending verification email: ', error);
-  }
+  // Send verification email asynchronously
+  const verificationTemplate = getVerificationTemplate();
+  const html = await verificationTemplate(emailVerificationOtp);
+  sendEmailAsync(email, 'Account Verification', html);
 
-  let successMessage;
-  if (process.env.NODE_ENV === 'development') {
-    // Development: include the verification code in the message
-    successMessage = res.__('auth.emailCodeSentWithOtp', { code: emailVerificationOtp });
-  } else {
-    // Production: standard message without exposing the code
-    successMessage = res.__('auth.emailCodeSent');
-  }
-
-  return response.created(successMessage, res, true);
+  const message = getOTPMessage(res, emailVerificationOtp);
+  return response.created(message, res, true);
 };
 
+/**
+ * Resend OTP
+ */
 const resendOtp = async (req, res) => {
-  console.log('UsersController@resendOtp');
-
   const { email } = req.body;
 
-  /** Find the user br given email */
   const user = await UserModel.getOneByColumnNameAndValue('email', email);
   if (!user) {
     return response.badRequest('error.invalidEmail', res, false);
@@ -125,47 +154,32 @@ const resendOtp = async (req, res) => {
     return response.badRequest('error.emailAlreadyVerified', res, false);
   }
 
-  /* Generate OTP to verify the user email  */
   const emailVerificationOtp = await dataHelper.generateSecureOTP(6);
 
-  const userDataToUpdate = {
-    otp: {
-      email_verification: emailVerificationOtp,
-    },
-  };
-  const hasUpdated = await UserModel.updateOne(user._id, userDataToUpdate);
+  const hasUpdated = await UserModel.updateOne(user._id, {
+    otp: { email_verification: emailVerificationOtp },
+  });
+
   if (!hasUpdated) {
     return response.exception('error.serverError', res, null);
   }
 
-  /** Send verification email */
-  try {
-    const subject = 'Account Verification';
-    const html = await verificationTemplate(emailVerificationOtp);
-    nodemailer.sendMail(email, subject, html);
-  } catch (error) {
-    console.log('Error while sending verification email: ', error);
-  }
+  // Send verification email asynchronously
+  const verificationTemplate = getVerificationTemplate();
+  const html = await verificationTemplate(emailVerificationOtp);
+  sendEmailAsync(email, 'Account Verification', html);
 
-  let successMessage;
-  if (process.env.NODE_ENV === 'development') {
-    // Development: include the verification code in the message
-    successMessage = res.__('auth.emailCodeSentWithOtp', { code: emailVerificationOtp });
-  } else {
-    // Production: standard message without exposing the code
-    successMessage = res.__('auth.emailCodeSent');
-  }
-
-  return response.success(successMessage, res, true);
+  const message = getOTPMessage(res, emailVerificationOtp);
+  return response.success(message, res, true);
 };
 
+/**
+ * Verify OTP
+ */
 const verifyOtp = async (req, res) => {
-  console.log('UsersController@verifyOtp');
-
   const { email, otp } = req.body;
 
-  /** Find the user br given email */
-  const user = await UserModel.getOneByColumnNameAndValue('email', email);
+  const user = await UserModel.getOneByColumnNameAndValue('email', email, true);
   if (!user) {
     return response.badRequest('error.invalidEmail', res, false);
   }
@@ -174,94 +188,85 @@ const verifyOtp = async (req, res) => {
     return response.badRequest('error.invalidOtp', res, false);
   }
 
-  /** Generate the JWT token and insert it into the DB */
-  const tokenData = {
+  const token = await dataHelper.generateJWTToken({
     user_id: user._id,
     role: user.role,
-  };
-  const token = await dataHelper.generateJWTToken(tokenData);
+  });
 
-  const userDataToUpdate = {
+  const hasUpdated = await UserModel.updateOne(user._id, {
     tokens: {
       auth_token: token,
       fcm_token: req.headers['fcm-token'],
     },
-    otp: {
-      email_verification: null,
-    },
+    otp: { email_verification: null },
     is_email_verified: true,
-  };
-  const hasUpdated = await UserModel.updateOne(user._id, userDataToUpdate);
+  });
+
   if (!hasUpdated) {
     return response.exception('error.serverError', res, null);
   }
 
-  const formatedUserData = await UserModel.getFormattedData(user);
+  const formattedUserData = UserModel.getFormattedData(user);
 
-  const result = {
+  return response.success('auth.otpVerified', res, {
     token,
-    user: formatedUserData,
-  };
-
-  return response.success('auth.otpVerified', res, result);
+    user: formattedUserData,
+  });
 };
 
+/**
+ * User login
+ */
 const userLogin = async (req, res) => {
-  console.log('UsersController@userlogin');
-
   const { email, password } = req.body;
 
-  /** Find the user br given email */
-  const user = await UserModel.getOneByColumnNameAndValue('email', email);
+  const user = await UserModel.getOneByColumnNameAndValue('email', email, true);
   if (!user) {
     return response.badRequest('auth.invalidCredentails', res, false);
   }
 
-  /** Validate the password */
   const isValidPassword = await dataHelper.validatePassword(password, user.password);
   if (!isValidPassword) {
     return response.badRequest('auth.invalidCredentails', res, false);
   }
 
-  /** Generate the JWT token and insert it into the DB */
-  const tokenData = {
+  const token = await dataHelper.generateJWTToken({
     user_id: user._id,
     role: user.role,
-  };
-  const token = await dataHelper.generateJWTToken(tokenData);
+  });
 
-  const userData = {
+  const hasUpdated = await UserModel.updateOne(user._id, {
     tokens: {
       auth_token: token,
       fcm_token: req.headers['fcm-token'],
     },
-  };
-  const hasUpdated = await UserModel.updateOne(user._id, userData);
+  });
+
   if (!hasUpdated) {
     return response.exception('error.serverError', res, null);
   }
 
-  const formatedUserData = await UserModel.getFormattedData(user);
+  const formattedUserData = UserModel.getFormattedData(user);
 
-  const result = {
+  return response.success('auth.loggedIn', res, {
     token,
-    user: formatedUserData,
-  };
-  return response.success('auth.loggedIn', res, result);
+    user: formattedUserData,
+  });
 };
 
+/**
+ * Change password
+ */
 const changePassword = async (req, res) => {
   const { new_password } = req.body;
   const { user } = req;
 
-  /* Convert password string into a hash  */
   const hashedPassword = await dataHelper.hashPassword(new_password);
 
-  /** Update new password in DB */
-  const userDataToUpdate = {
+  const hasUpdated = await UserModel.updateOne(user._id, {
     password: hashedPassword,
-  };
-  const hasUpdated = await UserModel.updateOne(user._id, userDataToUpdate);
+  });
+
   if (!hasUpdated) {
     return response.exception('error.serverError', res, null);
   }
@@ -269,61 +274,46 @@ const changePassword = async (req, res) => {
   return response.success('auth.passwordChanged', res, true);
 };
 
+/**
+ * Forgot password
+ */
 const forgotPassword = async (req, res) => {
-  console.log('UsersController@forgotPassword');
-
   const { email } = req.body;
 
-  /** Find the user br given email */
   const user = await UserModel.getOneByColumnNameAndValue('email', email);
   if (!user) {
     return response.badRequest('error.invalidEmail', res, false);
   }
 
-  /* Generate OTP to verify the user email  */
-  const forgotPasswordVerificationOtp = await dataHelper.generateSecureOTP(6);
+  const forgotPasswordOtp = await dataHelper.generateSecureOTP(6);
 
-  const userDataToUpdate = {
+  const hasUpdated = await UserModel.updateOne(user._id, {
     otp: {
       ...user.otp,
-      forgot_password: forgotPasswordVerificationOtp,
+      forgot_password: forgotPasswordOtp,
     },
-  };
-  const hasUpdated = await UserModel.updateOne(user._id, userDataToUpdate);
+  });
+
   if (!hasUpdated) {
     return response.exception('error.serverError', res, null);
   }
 
-  /** Send verification email */
-  try {
-    const subject = 'Forgot Password Verification';
-    const html = await forgotPasswordTemplate(forgotPasswordVerificationOtp);
-    nodemailer.sendMail(email, subject, html);
-  } catch (error) {
-    console.log('Error while sending verification email: ', error);
-  }
+  // Send email asynchronously
+  const forgotPasswordTemplate = getForgotPasswordTemplate();
+  const html = await forgotPasswordTemplate(forgotPasswordOtp);
+  sendEmailAsync(email, 'Forgot Password Verification', html);
 
-  let successMessage;
-  if (process.env.NODE_ENV === 'development') {
-    // Development: include the verification code in the message
-    successMessage = res.__('auth.emailCodeSentWithOtp', {
-      code: forgotPasswordVerificationOtp,
-    });
-  } else {
-    // Production: standard message without exposing the code
-    successMessage = res.__('auth.emailCodeSent');
-  }
-
-  return response.success(successMessage, res, true);
+  const message = getOTPMessage(res, forgotPasswordOtp);
+  return response.success(message, res, true);
 };
 
+/**
+ * Verify forgot password OTP
+ */
 const verifyForgotPasswordOTP = async (req, res) => {
-  console.log('UsersController@verifyForgotPasswordOTP');
-
   const { email, otp } = req.body;
 
-  /** Find the user br given email */
-  const user = await UserModel.getOneByColumnNameAndValue('email', email);
+  const user = await UserModel.getOneByColumnNameAndValue('email', email, true);
   if (!user) {
     return response.badRequest('error.invalidEmail', res, false);
   }
@@ -332,32 +322,28 @@ const verifyForgotPasswordOTP = async (req, res) => {
     return response.badRequest('error.invalidOtp', res, false);
   }
 
-  const userDataToUpdate = {
+  const hasUpdated = await UserModel.updateOne(user._id, {
     otp: {
       ...user.otp,
       email_verification: null,
       forgot_password: null,
     },
     is_email_verified: true,
-  };
+  });
 
-  const hasUpdated = await UserModel.updateOne(user._id, userDataToUpdate);
   if (!hasUpdated) {
     return response.exception('error.serverError', res, null);
   }
 
-  const result = {
-    user: {
-      id: user._id,
-    },
-  };
-
-  return response.success('auth.otpVerified', res, result);
+  return response.success('auth.otpVerified', res, {
+    user: { id: user._id },
+  });
 };
 
+/**
+ * Reset password
+ */
 const resetPassword = async (req, res) => {
-  console.log('UsersController@resetPassword');
-
   const { password, user_id } = req.body;
 
   const user = await UserModel.getOneByColumnNameAndValue('_id', user_id);
@@ -369,15 +355,12 @@ const resetPassword = async (req, res) => {
     return response.badRequest('error.otpNotVerified', res, false);
   }
 
-  /* Convert password string into a hash  */
   const hashedPassword = await dataHelper.hashPassword(password);
 
-  /** Update new password in DB */
-  const userDataToUpdate = {
+  const hasUpdated = await UserModel.updateOne(user._id, {
     password: hashedPassword,
-  };
+  });
 
-  const hasUpdated = await UserModel.updateOne(user._id, userDataToUpdate);
   if (!hasUpdated) {
     return response.exception('error.serverError', res, null);
   }
@@ -385,31 +368,36 @@ const resetPassword = async (req, res) => {
   return response.success('auth.passwordChanged', res, true);
 };
 
+/**
+ * Get user profile
+ */
 const getUserProfile = async (req, res) => {
-  console.log('UsersController@getUserProfile');
+  const socketService = getSocketService();
+  const socketEvents = getSocketEvents();
 
   const { user } = req;
 
+  // Emit socket event asynchronously
   socketService.emitToUsers([user._id], socketEvents.EMIT.USER_PROFILE_VIEWED, {
     message: 'Profile viewed',
     time: new Date(),
   });
 
-  const formatedUserData = await UserModel.getFormattedData(user);
+  const formattedUserData = UserModel.getFormattedData(user);
 
-  return response.success('success.userProfile', res, formatedUserData);
+  return response.success('success.userProfile', res, formattedUserData);
 };
 
+/**
+ * Get all users with pagination
+ */
 const getAllWithPagination = async (req, res) => {
-  console.log('UsersController@getAllWithPagination');
+  const { page, limit } = dataHelper.getPageAndLimit(req.query);
 
-  /** Extract the page and limt from query param */
-  const { page, limit } = await dataHelper.getPageAndLimit(req.query);
-
-  const filterObj = {
+  const result = await UserModel.getAllWithPagination(page, limit, {
     role: UserModel.roles.USER,
-  };
-  const result = await UserModel.getAllWithPagination(page, limit, filterObj);
+  });
+
   if (!result?.data?.length) {
     return response.success('success.noRecordsFound', res, result);
   }
@@ -417,17 +405,17 @@ const getAllWithPagination = async (req, res) => {
   return response.success('success.usersData', res, result);
 };
 
+/**
+ * Logout user
+ */
 const logout = async (req, res) => {
-  console.log('UsersController@logout');
-
   const { user } = req;
 
-  const dataToUpdate = {
+  const hasUpdated = await UserModel.updateOne(user._id, {
     'tokens.auth_token': '',
     'tokens.fcm_token': '',
-  };
+  });
 
-  const hasUpdated = await UserModel.updateOne(user._id, dataToUpdate);
   if (!hasUpdated) {
     return response.exception('error.serverError', res, null);
   }
@@ -435,17 +423,16 @@ const logout = async (req, res) => {
   return response.success('auth.logoutSuccess', res, true);
 };
 
+/**
+ * Delete user account (soft delete)
+ */
 const deleteOne = async (req, res) => {
-  console.log('UsersController@logout');
-
   const { user } = req;
 
-  // convert date into format example -2025-07-03T09:48:05.031+00:00
-  const dataToUpdate = {
+  const hasDeleted = await UserModel.updateOne(user._id, {
     deleted_at: new Date().toISOString().replace('Z', '+00:00'),
-  };
+  });
 
-  const hasDeleted = await UserModel.updateOne(user._id, dataToUpdate);
   if (!hasDeleted) {
     return response.exception('error.serverError', res, null);
   }
@@ -453,66 +440,62 @@ const deleteOne = async (req, res) => {
   return response.success('auth.deleteAccount', res, true);
 };
 
+/**
+ * Upload single image
+ */
 const uploadImage = async (req, res) => {
-  console.log('UsersController@uploadImage');
-
   if (!req?.file?.path) {
     return response.badRequest('error.fileNotUploaded', res, false);
   }
 
-  /** Convert file path into a public URL */
-  const filePath = req.file.path.replace(/\\/g, '/');
-  const fileUrl = `${req.protocol}://${req.get('host')}/${filePath}`;
+  const fileUrl = filePathToURL(req, req.file.path);
 
   return response.success('success.fileUploaded', res, { image_url: fileUrl });
 };
 
+/**
+ * Upload multiple images
+ */
 const uploadBulkImages = async (req, res) => {
-  console.log('UsersController@uploadBulkImages');
-
   const { files } = req;
   if (!files?.length) {
     return response.badRequest('error.fileNotUploaded', res, false);
   }
 
-  /** Convert file paths into public URLs */
-  const imageUrls = await files.map((file) => {
-    const filePath = file.path.replace(/\\/g, '/');
-    return `${req.protocol}://${req.get('host')}/${filePath}`;
-  });
+  const imageUrls = files.map((file) => filePathToURL(req, file.path));
 
   return response.success('success.fileUploaded', res, { image_urls: imageUrls });
 };
 
+/**
+ * Delete local image
+ */
 const deleteImage = async (req, res) => {
-  console.log('UsersController@deleteImage');
-
   try {
     const { image_url } = req.body;
 
-    const filePath = new URL(image_url).pathname; // e.g., /uploads/images/filename.jpg
-    const localPath = path.join(process.cwd(), filePath); // adjust path as needed
-
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
-    if (fs.existsSync(localPath)) {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename
-      fs.unlinkSync(localPath);
+    const deleted = deleteLocalFile(image_url);
+    if (deleted) {
       return response.success('success.fileDeleted', res, true);
     }
+
     return response.badRequest('error.fileNotFound', res, false);
-  } catch (err) {
+  } catch (error) {
+    console.log('Error in deleteImage: ', error);
     return response.exception('error.invalidFileUrlToDelete', res, false);
   }
 };
 
-const uploadImageAWS = async (req, res) => {
-  console.log('UsersController@uploadImageAWS');
+/**
+ * Upload image to AWS S3
+ */
+const uploadImageAWS = async (req, res) => response.success('success.fileUploaded', res, { image_url: req.image_url });
 
-  return response.success('success.fileUploaded', res, { image_url: req.image_url });
-};
-
+/**
+ * Delete image from AWS S3
+ */
 const deleteImageAWS = async (req, res) => {
-  console.log('UsersController@deleteImage');
+  const aws = getAWS();
 
   const { image_url } = req.body;
 
@@ -524,8 +507,11 @@ const deleteImageAWS = async (req, res) => {
   return response.success('success.fileDeleted', res, true);
 };
 
+/**
+ * Generate AWS S3 presigned URL
+ */
 const generatePresignedUrl = async (req, res) => {
-  console.log('UsersController@generatePresignedUrl');
+  const aws = getAWS();
 
   const { file_name, file_type, folder = 'uploads' } = req.body;
 
@@ -537,20 +523,24 @@ const generatePresignedUrl = async (req, res) => {
 
     return response.success('success.presignedUrlGenerated', res, result);
   } catch (error) {
+    console.log('Error in generatePresignedUrl: ', error);
     return response.exception('error.serverError', res, null);
   }
 };
 
+/**
+ * Export controller functions
+ */
 module.exports = {
   createOne,
   resendOtp,
+  verifyOtp,
   userLogin,
-  getUserProfile,
   changePassword,
   forgotPassword,
   verifyForgotPasswordOTP,
   resetPassword,
-  verifyOtp,
+  getUserProfile,
   getAllWithPagination,
   logout,
   deleteOne,

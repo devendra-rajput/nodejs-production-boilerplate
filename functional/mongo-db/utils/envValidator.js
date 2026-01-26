@@ -1,4 +1,8 @@
-// utils/envValidator.js
+/**
+ * Environment Validator
+ * Validates required environment variables on startup
+ */
+
 const validateEnvironment = () => {
   const requiredEnvVars = ['NODE_ENV', 'APPLICATION_PORT', 'DATABASE_URL', 'MAIL_HOST', 'REDIS_URL', 'JWT_TOKEN_KEY'];
 
@@ -14,8 +18,6 @@ const validateEnvironment = () => {
     console.error('❌ Invalid NODE_ENV:', process.env.NODE_ENV);
     process.exit(1);
   }
-
-  console.log('✅ Environment validation passed');
 };
 
-module.exports = validateEnvironment;
+module.exports = { validateEnvironment };

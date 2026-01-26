@@ -1,193 +1,371 @@
+/**
+ * Multi-IP Rate Limiter Test Utility
+ *
+ * Tests rate limiting with multiple simulated IP addresses.
+ * Following functional programming principles:
+ * - Pure functions for IP generation
+ * - Immutable statistics tracking
+ * - Functional composition
+ *
+ * Usage:
+ *   node tests/test-multi-ip.js
+ *   node tests/test-multi-ip.js --base-url http://localhost:8000 --users 10 --requests 25
+ *
+ * @module tests/test-multi-ip
+ */
+
 const http = require('http');
 
-class MultiIPRateLimiterTester {
-  constructor(baseUrl = 'http://localhost:8000') {
-    this.baseUrl = baseUrl;
-    this.stats = {
-      successful: 0,
-      blocked: 0,
-      errors: 0,
-      total: 0,
-      byIP: new Map(),
-    };
+/**
+ * Default test configuration
+ */
+const DEFAULT_CONFIG = {
+  baseUrl: 'http://localhost:8000',
+  endpoint: '/load-test',
+  userCount: 10,
+  requestsPerUser: 25,
+  batchDelay: 50,
+  batchSize: 50,
+  timeout: 3000,
+};
+
+/**
+ * IP address ranges for simulation
+ */
+const IP_RANGES = [
+  '192.168',
+  '10.0',
+  '172.16',
+];
+
+/**
+ * Generate fake IP address
+ * Pure function that creates IP based on user ID
+ *
+ * @param {number} userId - User identifier
+ * @returns {string} Generated IP address
+ */
+const generateFakeIP = (userId) => {
+  const rangeIndex = userId % IP_RANGES.length;
+  const range = IP_RANGES[rangeIndex];
+  const thirdOctet = Math.floor(userId / 255) + 1;
+  const fourthOctet = (userId % 254) + 1;
+
+  return `${range}.${thirdOctet}.${fourthOctet}`;
+};
+
+/**
+ * Create empty statistics object
+ * Pure function that returns initial stats
+ *
+ * @returns {Object} Empty statistics object
+ */
+const createEmptyStats = () => ({
+  successful: 0,
+  blocked: 0,
+  errors: 0,
+  total: 0,
+  byIP: new Map(),
+});
+
+/**
+ * Create empty IP statistics
+ * Pure function that returns initial IP stats
+ *
+ * @returns {Object} Empty IP statistics
+ */
+const createEmptyIPStats = () => ({
+  successful: 0,
+  blocked: 0,
+  errors: 0,
+});
+
+/**
+ * Update statistics with result
+ * @param {Object} stats - Current statistics
+ * @param {Object} result - Request result
+ * @returns {Object} Updated statistics
+ */
+const updateStats = (stats, result) => {
+  const { ip, statusCode } = result;
+
+  // Create new stats object
+  const newStats = {
+    ...stats,
+    total: stats.total + 1,
+    byIP: new Map(stats.byIP),
+  };
+
+  // Ensure IP stats exist
+  if (!newStats.byIP.has(ip)) {
+    newStats.byIP.set(ip, createEmptyIPStats());
   }
 
-  generateFakeIP(userId) {
-    const segments = [
-      `192.168.${Math.floor(userId / 255) + 1}.${(userId % 254) + 1}`,
-      `10.0.${Math.floor(userId / 255) + 1}.${(userId % 254) + 1}`,
-      `172.16.${Math.floor(userId / 255) + 1}.${(userId % 254) + 1}`,
-    ];
-    return segments[userId % 3];
+  // Get IP stats and create updated version
+  const ipStats = newStats.byIP.get(ip);
+  const updatedIPStats = { ...ipStats };
+
+  // Update based on status code
+  if (statusCode === 200) {
+    newStats.successful = stats.successful + 1;
+    updatedIPStats.successful += 1;
+  } else if (statusCode === 429) {
+    newStats.blocked = stats.blocked + 1;
+    updatedIPStats.blocked += 1;
+  } else {
+    newStats.errors = stats.errors + 1;
+    updatedIPStats.errors += 1;
   }
 
-  makeRequestWithIP(ip, endpoint = '/load-test') {
-    return new Promise((resolve) => {
-      const url = new URL(endpoint, this.baseUrl);
+  newStats.byIP.set(ip, updatedIPStats);
 
-      const options = {
-        hostname: url.hostname,
-        port: url.port || 8000,
-        path: url.pathname,
-        method: 'GET',
-        timeout: 3000,
-        headers: {
-          'X-Forwarded-For': ip,
-          'X-Real-IP': ip,
-        },
-      };
+  return newStats;
+};
 
-      const startTime = Date.now();
-      const req = http.request(options, (res) => {
-        res.resume(); // Consume the stream
+/**
+ * Parse URL components
+ * Pure function that extracts URL parts
+ *
+ * @param {string} baseUrl - Base URL
+ * @param {string} endpoint - Endpoint path
+ * @returns {Object} URL components
+ */
+const parseUrl = (baseUrl, endpoint) => {
+  const url = new URL(endpoint, baseUrl);
+  return {
+    hostname: url.hostname,
+    port: url.port || 8000,
+    path: url.pathname,
+  };
+};
 
-        res.on('end', () => {
-          resolve({
-            statusCode: res.statusCode,
-            duration: Date.now() - startTime,
-            ip,
-            success: res.statusCode === 200,
-          });
-        });
+/**
+ * Make HTTP request with custom IP headers
+ * @param {string} baseUrl - Base URL
+ * @param {string} endpoint - Endpoint path
+ * @param {string} ip - IP address to simulate
+ * @param {number} timeout - Request timeout
+ * @returns {Promise<Object>} Request result
+ */
+const makeRequestWithIP = (baseUrl, endpoint, ip, timeout) => new Promise((resolve) => {
+  const urlComponents = parseUrl(baseUrl, endpoint);
+
+  const options = {
+    ...urlComponents,
+    method: 'GET',
+    timeout,
+    headers: {
+      'X-Forwarded-For': ip,
+      'X-Real-IP': ip,
+    },
+  };
+
+  const startTime = Date.now();
+  const req = http.request(options, (res) => {
+    // Consume response data
+    res.resume();
+
+    res.on('end', () => {
+      resolve({
+        statusCode: res.statusCode,
+        duration: Date.now() - startTime,
+        ip,
+        success: res.statusCode === 200,
       });
-
-      req.on('error', (error) => {
-        resolve({
-          statusCode: 0,
-          duration: Date.now() - startTime,
-          ip,
-          error: error.message,
-          success: false,
-        });
-      });
-
-      req.on('timeout', () => {
-        req.destroy();
-        resolve({
-          statusCode: 0,
-          duration: Date.now() - startTime,
-          ip,
-          error: 'Timeout',
-          success: false,
-        });
-      });
-
-      req.end();
     });
-  }
+  });
 
-  async testMultipleUsers(userCount = 10, requestsPerUser = 25) {
-    console.log(`🧪 Testing ${userCount} users with ${requestsPerUser} requests each\n`);
+  req.on('error', (error) => {
+    resolve({
+      statusCode: 0,
+      duration: Date.now() - startTime,
+      ip,
+      error: error.message,
+      success: false,
+    });
+  });
 
-    const allPromises = [];
-    const totalRequests = userCount * requestsPerUser;
-    let completed = 0;
+  req.on('timeout', () => {
+    req.destroy();
+    resolve({
+      statusCode: 0,
+      duration: Date.now() - startTime,
+      ip,
+      error: 'Timeout',
+      success: false,
+    });
+  });
 
-    // Progress indicator
-    const progressInterval = setInterval(() => {
-      const percent = ((completed / totalRequests) * 100).toFixed(1);
-      process.stdout.write(`\r📨 Progress: ${completed}/${totalRequests} (${percent}%)`);
-    }, 100);
+  req.end();
+});
 
-    for (let userId = 1; userId <= userCount; userId += 1) {
-      const userIP = this.generateFakeIP(userId);
+/**
+ * Create progress tracker
+ * @param {number} total - Total number of requests
+ * @returns {Object} Progress tracker object
+ */
+const createProgressTracker = (total) => {
+  let completed = 0;
+  let interval = null;
 
-      if (!this.stats.byIP.has(userIP)) {
-        this.stats.byIP.set(userIP, { successful: 0, blocked: 0, errors: 0 });
+  return {
+    start: () => {
+      interval = setInterval(() => {
+        const percent = ((completed / total) * 100).toFixed(1);
+        process.stdout.write(`\r📨 Progress: ${completed}/${total} (${percent}%)`);
+      }, 100);
+    },
+    increment: () => {
+      completed += 1;
+    },
+    stop: () => {
+      if (interval) {
+        clearInterval(interval);
+        console.log(`\r📨 Progress: ${completed}/${total} (100.0%)`);
       }
+    },
+  };
+};
 
-      for (let requestNum = 1; requestNum <= requestsPerUser; requestNum += 1) {
-        // eslint-disable-next-line no-loop-func
-        const promise = this.makeRequestWithIP(userIP).then((result) => {
-          completed += 1;
+/**
+ * Execute multi-user test
+ * @param {Object} config - Test configuration
+ * @returns {Promise<Object>} Test statistics
+ */
+const runMultiUserTest = async (config) => {
+  console.log(`🧪 Testing ${config.userCount} users with ${config.requestsPerUser} requests each\n`);
 
-          // Update global stats
-          this.stats.total += 1;
-          if (result.statusCode === 200) {
-            this.stats.successful += 1;
-            this.stats.byIP.get(userIP).successful += 1;
-          } else if (result.statusCode === 429) {
-            this.stats.blocked += 1;
-            this.stats.byIP.get(userIP).blocked += 1;
-          } else {
-            this.stats.errors += 1;
-            this.stats.byIP.get(userIP).errors += 1;
-          }
+  let stats = createEmptyStats();
+  const totalRequests = config.userCount * config.requestsPerUser;
+  const progress = createProgressTracker(totalRequests);
+  const allPromises = [];
 
-          return result;
+  progress.start();
+
+  for (let userId = 1; userId <= config.userCount; userId += 1) {
+    const userIP = generateFakeIP(userId);
+
+    for (let requestNum = 1; requestNum <= config.requestsPerUser; requestNum += 1) {
+      const promise = makeRequestWithIP(
+        config.baseUrl,
+        config.endpoint,
+        userIP,
+        config.timeout,
+      ).then((result) => {
+        progress.increment();
+        return result;
+      });
+
+      allPromises.push(promise);
+
+      // Add delay between batches
+      if (allPromises.length % config.batchSize === 0) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => {
+          setTimeout(resolve, config.batchDelay);
         });
-
-        allPromises.push(promise);
-
-        // Small delay to avoid connection limits
-        if (allPromises.length % 50 === 0) {
-          // eslint-disable-next-line no-await-in-loop, no-promise-executor-return
-          await new Promise((resolve) => setTimeout(resolve, 50));
-        }
       }
     }
-
-    await Promise.all(allPromises);
-    clearInterval(progressInterval);
-
-    this.printMultiIPReport();
-    return this.stats;
   }
 
-  printMultiIPReport() {
-    console.log('\n\n📈 ===== MULTI-IP TEST RESULTS =====');
-    console.log(`👥 Users Simulated: ${this.stats.byIP.size}`);
-    console.log(`📨 Total Requests: ${this.stats.total}`);
-    console.log(`✅ Successful: ${this.stats.successful}`);
-    console.log(`🚫 Rate Limited: ${this.stats.blocked}`);
-    console.log(`❌ Errors: ${this.stats.errors}`);
+  const results = await Promise.all(allPromises);
+  progress.stop();
 
-    console.log('\n📊 Per-IP Breakdown:');
-    this.stats.byIP.forEach((stats, ip) => {
-      console.log(`   ${ip}: ✅ ${stats.successful} 🚫 ${stats.blocked} ❌ ${stats.errors}`);
-    });
+  // Update stats with all results
+  stats = results.reduce((acc, result) => updateStats(acc, result), stats);
 
-    // Validate rate limiter per IP
-    let allIPsLimited = true;
-    this.stats.byIP.forEach((stats, ip) => {
-      if (stats.successful > 200) { // Should be limited to 200 per second
-        console.log(`⚠️  IP ${ip} may not be properly limited (${stats.successful} successes)`);
-        allIPsLimited = false;
-      }
-    });
+  return stats;
+};
 
-    if (allIPsLimited) {
-      console.log('🎉 Rate limiter is correctly limiting per IP!');
+/**
+ * Print test report
+ * @param {Object} stats - Test statistics
+ */
+const printTestReport = (stats) => {
+  console.log('\n\n📈 ===== MULTI-IP TEST RESULTS =====');
+  console.log(`👥 Users Simulated: ${stats.byIP.size}`);
+  console.log(`📨 Total Requests: ${stats.total}`);
+  console.log(`✅ Successful: ${stats.successful}`);
+  console.log(`🚫 Rate Limited: ${stats.blocked}`);
+  console.log(`❌ Errors: ${stats.errors}`);
+
+  console.log('\n📊 Per-IP Breakdown:');
+  stats.byIP.forEach((ipStats, ip) => {
+    console.log(`   ${ip}: ✅ ${ipStats.successful} 🚫 ${ipStats.blocked} ❌ ${ipStats.errors}`);
+  });
+
+  // Validate rate limiter effectiveness
+  let allIPsLimited = true;
+  const maxAllowedPerIP = 200; // Expected rate limit
+
+  stats.byIP.forEach((ipStats, ip) => {
+    if (ipStats.successful > maxAllowedPerIP) {
+      console.log(`⚠️  IP ${ip} may not be properly limited (${ipStats.successful} successes)`);
+      allIPsLimited = false;
     }
-  }
-}
+  });
 
-// Run the test
-if (require.main === module) {
+  if (allIPsLimited) {
+    console.log('\n🎉 Rate limiter is correctly limiting per IP!');
+  } else {
+    console.log('\n⚠️  Rate limiter may not be working as expected');
+  }
+};
+
+/**
+ * Parse command line arguments
+ * @returns {Object} Parsed configuration
+ */
+const parseArguments = () => {
   const args = process.argv.slice(2);
-  let baseUrl = 'http://localhost:8000';
-  let userCount = 10;
-  let requestsPerUser = 25;
+  const config = { ...DEFAULT_CONFIG };
 
-  // Parse arguments
   const baseUrlIndex = args.indexOf('--base-url');
   if (baseUrlIndex !== -1 && args[baseUrlIndex + 1]) {
-    baseUrl = args[baseUrlIndex + 1];
-    console.log(`Using Base URL: ${baseUrl}`);
+    config.baseUrl = args[baseUrlIndex + 1];
   }
 
   const usersIndex = args.indexOf('--users');
   if (usersIndex !== -1 && args[usersIndex + 1]) {
-    userCount = parseInt(args[usersIndex + 1], 10);
+    config.userCount = parseInt(args[usersIndex + 1], 10);
   }
 
   const requestsIndex = args.indexOf('--requests');
   if (requestsIndex !== -1 && args[requestsIndex + 1]) {
-    requestsPerUser = parseInt(args[requestsIndex + 1], 10);
+    config.requestsPerUser = parseInt(args[requestsIndex + 1], 10);
   }
 
-  const tester = new MultiIPRateLimiterTester(baseUrl);
-  tester.testMultipleUsers(userCount, requestsPerUser).catch(console.error);
+  return config;
+};
+
+/**
+ * Main test runner
+ */
+const runTest = async () => {
+  try {
+    const config = parseArguments();
+    const stats = await runMultiUserTest(config);
+    printTestReport(stats);
+    process.exit(0);
+  } catch (error) {
+    console.error('\n❌ Test failed:', error.message);
+    process.exit(1);
+  }
+};
+
+// Run test if executed directly
+if (require.main === module) {
+  runTest();
 }
 
-module.exports = MultiIPRateLimiterTester;
+/**
+ * Export for testing
+ */
+module.exports = {
+  runMultiUserTest,
+  makeRequestWithIP,
+  generateFakeIP,
+  createEmptyStats,
+  updateStats,
+  DEFAULT_CONFIG,
+};

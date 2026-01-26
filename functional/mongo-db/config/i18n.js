@@ -1,3 +1,8 @@
+/**
+ * Internationalization (i18n) Configuration
+ * Sets up localization support
+ */
+
 const i18n = require('i18n');
 const path = require('path');
 

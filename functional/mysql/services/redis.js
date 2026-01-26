@@ -1,5 +1,13 @@
+/**
+ * Redis Service
+ * Handles Redis caching operations
+ */
+
 const { redisClient } = require('../config/v1/redis');
 
+/**
+ * Set key-value pair in Redis with expiration
+ */
 const setKey = async (key, data, expiration = process.env.REDIS_EXPIRATION) => {
   console.log('RedisService@setKey');
   try {
@@ -14,6 +22,9 @@ const setKey = async (key, data, expiration = process.env.REDIS_EXPIRATION) => {
   }
 };
 
+/**
+ * Get all keys from Redis
+ */
 const getAllKeys = async () => {
   console.log('RedisService@getAllKeys');
   try {
@@ -28,6 +39,9 @@ const getAllKeys = async () => {
   }
 };
 
+/**
+ * Get all keys matching a prefix
+ */
 const getAllSpecificKeys = async (keyPrefix) => {
   console.log('RedisService@getAllSpecificKeys');
   try {
@@ -42,6 +56,9 @@ const getAllSpecificKeys = async (keyPrefix) => {
   }
 };
 
+/**
+ * Get value by key from Redis
+ */
 const getKey = async (key) => {
   console.log('RedisService@getKey');
   try {
@@ -56,6 +73,9 @@ const getKey = async (key) => {
   }
 };
 
+/**
+ * Get count of all keys
+ */
 const getCount = async () => {
   console.log('RedisService@getCount');
   try {
@@ -70,6 +90,9 @@ const getCount = async () => {
   }
 };
 
+/**
+ * Delete a key from Redis
+ */
 const clearKey = async (key) => {
   console.log('RedisService@clearKey');
   try {
@@ -84,6 +107,9 @@ const clearKey = async (key) => {
   }
 };
 
+/**
+ * Clear all keys from Redis
+ */
 const flushAll = async () => {
   console.log('RedisService@flushAll');
   try {
@@ -98,6 +124,30 @@ const flushAll = async () => {
   }
 };
 
+/**
+ * Cleanup Redis connection
+ */
+const cleanup = async () => {
+  console.log('RedisService@cleanup');
+  try {
+    if (redisClient && redisClient.status === 'ready') {
+      await redisClient.quit();
+      console.log('✅ Redis connection closed');
+      return true;
+    }
+    return true;
+  } catch (error) {
+    console.error('RedisService@cleanup Error:', error);
+    // Force disconnect if quit fails
+    try {
+      await redisClient.disconnect();
+    } catch (disconnectError) {
+      console.error('RedisService@disconnect Error:', disconnectError);
+    }
+    return false;
+  }
+};
+
 module.exports = {
   setKey,
   getAllKeys,
@@ -106,4 +156,5 @@ module.exports = {
   getCount,
   clearKey,
   flushAll,
+  cleanup,
 };

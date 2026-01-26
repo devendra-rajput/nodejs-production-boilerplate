@@ -51,12 +51,12 @@ module.exports = {
         defaultValue: null,
       },
       email_verification_otp: {
-        type: Sequelize.INTEGER,
+        type: Sequelize.STRING(6),
         allowNull: true,
         defaultValue: null,
       },
       forgot_password_otp: {
-        type: Sequelize.INTEGER,
+        type: Sequelize.STRING(6),
         allowNull: true,
         defaultValue: null,
       },

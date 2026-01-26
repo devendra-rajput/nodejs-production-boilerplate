@@ -1,13 +1,36 @@
+/**
+ * Timezone Middleware
+ * Extracts and validates timezone from request headers
+ */
+
 const moment = require('moment-timezone');
 
-const timezone = (req, res, next) => {
-  const tz = req.headers['x-timezone'] || 'UTC';
-  if (moment.tz.zone(tz)) {
-    req.timezone = tz;
-  } else {
-    req.timezone = 'UTC';
-  }
+const DEFAULT_TIMEZONE = 'UTC';
+
+/**
+ * Extract timezone from request headers
+ */
+const extractTimezone = (req) => req.headers['x-timezone'] || DEFAULT_TIMEZONE;
+
+/**
+ * Check if timezone is valid
+ */
+const isValidTimezone = (timezone) => moment.tz.zone(timezone) !== null;
+
+/**
+ * Get validated timezone or default
+ */
+const getValidatedTimezone = (timezone) => (
+  isValidTimezone(timezone) ? timezone : DEFAULT_TIMEZONE
+);
+
+/**
+ * Timezone middleware
+ */
+const timezoneMiddleware = (req, res, next) => {
+  const timezone = extractTimezone(req);
+  req.timezone = getValidatedTimezone(timezone);
   next();
 };
 
-module.exports = timezone;
+module.exports = timezoneMiddleware;

@@ -1,15 +1,18 @@
+/**
+ * Swagger API Documentation Configuration
+ * Defines OpenAPI 3.0 specification for the API
+ */
+
 const swaggerJsdoc = require('swagger-jsdoc');
 
 const options = {
   definition: {
     openapi: '3.0.0',
     info: {
-      title: 'Production-Ready Scalable Node.js API',
+      title: 'Node.js Production-Ready API',
       version: '1.0.0',
       description: `
-# 
-
-A high-performance, enterprise-grade API designed for 100k+ concurrent requests with global low latency.
+A high-performance, enterprise-grade API with user management, authentication, and file handling.
 
 ## 🚀 Architecture Features
 
@@ -43,7 +46,7 @@ x-timezone: America/New_York
 - **Throughput**: 300+ req/sec tested
 - **Response Time**: ~150ms average
 - **Caching**: Automatic for user queries
-            `,
+      `,
       contact: {
         name: 'API Support',
         email: 'developer@devrajput.in',

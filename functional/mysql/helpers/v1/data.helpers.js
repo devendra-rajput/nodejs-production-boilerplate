@@ -1,85 +1,83 @@
+/**
+ * Data Helpers
+ * Utility functions for data manipulation, validation, and security
+ */
+
 const Joi = require('joi');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const moment = require('moment-timezone');
 
-/* Valiate the request body as per the provided schema */
-const joiValidation = async (reqBody, schema) => {
-  console.log('DataHelper@joiValidation');
+const PASSWORD_REGEX = /^(?=.*?[A-Z])(?=.*?[a-z])(?=.*?[0-9])(?=.*[@$!%*?&]).{8,}/;
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const DEFAULT_PAGE = 1;
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 100;
+const BCRYPT_SALT_ROUNDS = 10;
 
+/**
+ * Validate request body against Joi schema
+ */
+const joiValidation = async (reqBody, schema) => {
   try {
     await Joi.object(schema).validateAsync(reqBody);
-    return false;
-  } catch (errors) {
-    const parsedErrors = [];
-    const errorDetails = errors.details;
-    if (errorDetails?.length) {
-      for (let i = 0; i < errorDetails.length; i += 1) {
-        const msg = errorDetails[i].message.replace(/"/g, '');
-        parsedErrors.push(msg);
-      }
+    return false; // No errors
+  } catch (error) {
+    if (error.details) {
+      return error.details.map((e) => e.message.replace(/"/g, ''));
     }
-
-    if (parsedErrors.length > 0) {
-      return parsedErrors;
-    }
-
     return false;
   }
 };
 
-/* Check the password strength */
-const checkPasswordRegex = async (password) => {
-  console.log('DataHelper@passwordRegex');
+/**
+ * Check if password matches regex pattern
+ */
+const checkPasswordRegex = (password) => PASSWORD_REGEX.test(password);
 
-  const passwordRegex = /^(?=.*?[A-Z])(?=.*?[a-z])(?=.*?[0-9])(?=.*[@$!%*?&]).{8,}/;
-  if (!passwordRegex.test(password)) {
-    return false;
-  }
-  return true;
-};
+/**
+ * Validate email format
+ */
+const isValidEmail = (email) => EMAIL_REGEX.test(email);
 
-/* Convert password string into hash */
+/**
+ * Hash password using bcrypt
+ */
 const hashPassword = async (password) => {
-  console.log('DataHelper@hashPassword');
-
-  const hashedPassword = await bcrypt.hash(password, 10);
+  const hashedPassword = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
   if (!hashedPassword) {
     throw new Error('Error generating password hash');
   }
-
   return hashedPassword;
 };
 
-/* Validate the hashed password and the password string */
-const validatePassword = async (passwordString, passwordHash) => {
-  console.log('DataHelper@validatePassword');
+/**
+ * Validate password against hash
+ */
+const validatePassword = async (passwordString, passwordHash) => (
+  bcrypt.compare(passwordString, passwordHash)
+);
 
-  const isPasswordValid = await bcrypt.compare(passwordString, passwordHash);
-  if (!isPasswordValid) {
+/**
+ * Generate JWT token
+ */
+const generateJWTToken = (data) => {
+  try {
+    const token = jwt.sign(data, process.env.JWT_TOKEN_KEY, {
+      expiresIn: process.env.JWT_TOKEN_EXPIRY || '30d',
+    });
+    return token || false;
+  } catch (error) {
+    console.error('JWT generation error:', error);
     return false;
   }
-
-  return true;
 };
 
-/* Generate the JWT token */
-const generateJWTToken = async (data) => {
-  console.log('DataHelper@generateJWTToken');
-
-  const token = jwt.sign(data, process.env.JWT_TOKEN_KEY);
-  if (!token) {
-    return false;
-  }
-
-  return token;
-};
-
-/* Generate OTP */
-const generateSecureOTP = async (length = 6) => {
-  console.log('DataHelper@generateSecureOTP');
-
+/**
+ * Generate secure OTP
+ */
+const generateSecureOTP = (length = 6) => {
   const digits = '0123456789';
   let otp = '';
   for (let i = 0; i < length; i += 1) {
@@ -88,121 +86,118 @@ const generateSecureOTP = async (length = 6) => {
   return otp;
 };
 
-/** Validate the email */
-const isValidEmail = async (value) => {
-  // Regular expression for validating an email address
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-  if (emailRegex.test(value)) {
-    return true;
+/**
+ * Parse page number from query
+ */
+const parsePage = (page) => {
+  const pageNo = parseInt(page, 10);
+  if (Number.isNaN(pageNo) || pageNo < 1) {
+    return DEFAULT_PAGE;
   }
-  return false;
+  return pageNo;
 };
 
-/** Extract the page and limit from query params */
-const getPageAndLimit = async (reqQuery) => {
-  console.log('DataHelper@getPageAndLimit');
-
-  const resObj = {
-    page: 1,
-    limit: 50,
-  };
-
-  if (reqQuery.page) {
-    let pageNo = parseInt(reqQuery.page, 10);
-
-    if (typeof (pageNo) !== 'number') {
-      pageNo = 1;
-    } else if (pageNo < 1) {
-      pageNo = 1;
-    }
-
-    resObj.page = pageNo;
+/**
+ * Parse limit from query
+ */
+const parseLimit = (limit) => {
+  const limitVal = parseInt(limit, 10);
+  if (Number.isNaN(limitVal) || limitVal < 1) {
+    return DEFAULT_LIMIT;
   }
-
-  if (reqQuery.limit) {
-    let limit = parseInt(reqQuery.limit, 10);
-
-    if (typeof (limit) !== 'number') {
-      limit = 50;
-    } else if (limit < 1) {
-      limit = 50;
-    }
-
-    if (limit > 100) {
-      limit = 100;
-    }
-
-    resObj.limit = limit;
-  }
-
-  return resObj;
+  return Math.min(limitVal, MAX_LIMIT);
 };
 
-/** Calculate the pagination param and return the offest */
-const calculatePagination = async (totalItems = null, currentPage = null, limit = null) => {
-  console.log('DataHelper@calculatePagination');
+/**
+ * Get page and limit from request query
+ */
+const getPageAndLimit = (reqQuery) => ({
+  page: parsePage(reqQuery.page),
+  limit: parseLimit(reqQuery.limit),
+});
 
-  let page = currentPage;
-  let limitVal = limit;
+/**
+ * Calculate pagination metadata
+ */
+const calculatePagination = (totalItems = 0, currentPage = DEFAULT_PAGE, limit = DEFAULT_LIMIT) => {
+  const page = parsePage(currentPage);
+  const limitVal = parseLimit(limit) || (totalItems > DEFAULT_LIMIT ? DEFAULT_LIMIT : totalItems);
 
-  // set a default currentPage if it's not provided
-  if (!page) {
-    page = 1;
-  }
-
-  // set a default limit if it's not provided
-  if (!limitVal) {
-    if (totalItems > 50) {
-      limitVal = 50;
-    } else {
-      limitVal = totalItems;
-    }
-  }
-
-  let totalPages = Math.ceil(totalItems / limitVal);
-  if (totalPages < 1) {
-    totalPages = 1;
-  }
-
-  // if the page number requested is greater than the total pages, set page number to total pages
-  if (page > totalPages) {
-    page = totalPages;
-  }
-
-  let offset;
-  if (currentPage > 1) {
-    offset = (currentPage - 1) * limit;
-  } else {
-    offset = 0;
-  }
+  const totalPages = Math.max(Math.ceil(totalItems / limitVal), 1);
+  const validPage = Math.min(page, totalPages);
+  const offset = validPage > 1 ? (validPage - 1) * limitVal : 0;
 
   return {
-    currentPage,
+    currentPage: validPage,
     totalPages,
     offset,
-    limit,
+    limit: limitVal,
+    totalItems,
   };
 };
 
-/** Convert into a specific timezone */
+/**
+ * Convert date to timezone and format
+ */
 const convertDateTimezoneAndFormat = (date, timezone = 'UTC', format = 'YYYY-MM-DDTHH:mm:ssZ') => {
-  console.log('DataHelper@convertDateTimezoneAndFormat');
-
   if (!date) return null;
 
-  return moment(date).tz(timezone).format(format);
+  try {
+    return moment(date).tz(timezone).format(format);
+  } catch (error) {
+    console.error('Date conversion error:', error);
+    return null;
+  }
 };
 
+/**
+ * Get current timestamp in timezone
+ */
+const getCurrentTimestamp = (timezone = 'UTC', format = 'YYYY-MM-DDTHH:mm:ssZ') => moment().tz(timezone).format(format);
+
+/**
+ * Sanitize string input
+ */
+const sanitizeString = (str) => {
+  if (typeof str !== 'string') return '';
+  return str.trim().replace(/[<>]/g, '');
+};
+
+/**
+ * Generate random string
+ */
+const generateRandomString = (length = 32) => crypto.randomBytes(Math.ceil(length / 2))
+  .toString('hex')
+  .slice(0, length);
+
 module.exports = {
+  // Validation
   joiValidation,
   checkPasswordRegex,
+  isValidEmail,
+
+  // Password & Security
   hashPassword,
   validatePassword,
   generateJWTToken,
   generateSecureOTP,
-  isValidEmail,
+
+  // Pagination
   getPageAndLimit,
   calculatePagination,
+  parsePage,
+  parseLimit,
+
+  // Date & Time
   convertDateTimezoneAndFormat,
+  getCurrentTimestamp,
+
+  // Utilities
+  sanitizeString,
+  generateRandomString,
+
+  // Constants (for external use)
+  DEFAULT_PAGE,
+  DEFAULT_LIMIT,
+  MAX_LIMIT,
 };

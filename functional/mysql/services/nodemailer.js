@@ -1,7 +1,15 @@
+/**
+ * Nodemailer Service
+ * Handles email sending functionality
+ */
+
 const nodemailer = require('nodemailer');
 const path = require('path');
 const logger = require('../utils/logger');
 
+/**
+ * Send email using Nodemailer
+ */
 const sendMail = async (to, subject, html, attachments = []) => {
   console.log('NodeMailerService@sendMailNodemailer');
 
@@ -52,6 +60,23 @@ const sendMail = async (to, subject, html, attachments = []) => {
   }
 };
 
+/**
+ * Cleanup Nodemailer resources
+ */
+const cleanup = async () => {
+  console.log('NodemailerService@cleanup');
+  try {
+    // Nodemailer doesn't maintain persistent connections
+    // Transporter is created per request and closed automatically
+    console.log('✅ Nodemailer cleanup completed');
+    return true;
+  } catch (error) {
+    console.error('NodemailerService@cleanup Error:', error);
+    return false;
+  }
+};
+
 module.exports = {
   sendMail,
+  cleanup,
 };
